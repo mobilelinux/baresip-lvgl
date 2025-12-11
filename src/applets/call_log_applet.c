@@ -2,6 +2,7 @@
 #include "applet_manager.h"
 #include "baresip_manager.h"
 #include "history_manager.h"
+#include "logger.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -16,8 +17,8 @@ static void call_back_clicked(lv_event_t *e) {
   const call_log_entry_t *entry =
       (const call_log_entry_t *)lv_event_get_user_data(e);
   if (entry) {
-    printf("[CallLogApplet] Calling back %s at %s\n", entry->name,
-           entry->number);
+    log_info("CallLogApplet", "Calling back %s at %s", entry->name,
+             entry->number);
     if (baresip_manager_call(entry->number) == 0) {
       // Switch to call applet if call initiated successfully
       applet_manager_launch_applet(&call_applet);
@@ -53,7 +54,7 @@ static lv_color_t get_call_color(call_type_t type) {
 }
 
 static int call_log_init(applet_t *applet) {
-  printf("[CallLogApplet] Initializing\n");
+  log_info("CallLogApplet", "Initializing");
 
   // Create header with back button
   lv_obj_t *header = lv_obj_create(applet->screen);
@@ -134,8 +135,8 @@ static int call_log_init(applet_t *applet) {
       *param_start = '\0'; // Strip parameters like ;transport=udp
     }
 
-    printf("[CallLogApplet] Entry %d cleaned URI: '%s' (Original: '%s')\n", i,
-           uri_buf, entry->number);
+    log_debug("CallLogApplet", "Entry %d cleaned URI: '%s' (Original: '%s')", i,
+              uri_buf, entry->number);
 
     lv_obj_t *number_label = lv_label_create(details_row);
     char number_display[150];
@@ -175,27 +176,27 @@ static int call_log_init(applet_t *applet) {
 
 static void call_log_start(applet_t *applet) {
   (void)applet;
-  printf("[CallLogApplet] Started\n");
+  log_info("CallLogApplet", "Started");
 }
 
 static void call_log_pause(applet_t *applet) {
   (void)applet;
-  printf("[CallLogApplet] Paused\n");
+  log_debug("CallLogApplet", "Paused");
 }
 
 static void call_log_resume(applet_t *applet) {
   (void)applet;
-  printf("[CallLogApplet] Resumed\n");
+  log_debug("CallLogApplet", "Resumed");
 }
 
 static void call_log_stop(applet_t *applet) {
   (void)applet;
-  printf("[CallLogApplet] Stopped\n");
+  log_info("CallLogApplet", "Stopped");
 }
 
 static void call_log_destroy(applet_t *applet) {
   (void)applet;
-  printf("[CallLogApplet] Destroying\n");
+  log_info("CallLogApplet", "Destroying");
 }
 
 // Define the call log applet

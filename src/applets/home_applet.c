@@ -1,5 +1,6 @@
 #include "applet.h"
 #include "applet_manager.h"
+#include "logger.h"
 #include <stdio.h>
 
 // Home applet data
@@ -16,7 +17,7 @@ static void applet_tile_clicked(lv_event_t *e) {
 }
 
 static int home_init(applet_t *applet) {
-  printf("[HomeApplet] Initializing\n");
+  log_info("HomeApplet", "Initializing");
 
   // Allocate applet data
   home_data_t *data = lv_mem_alloc(sizeof(home_data_t));
@@ -79,16 +80,18 @@ static int home_init(applet_t *applet) {
   return 0;
 }
 
-static void home_start(applet_t *applet) { printf("[HomeApplet] Started\n"); }
+static void home_start(applet_t *applet) { log_info("HomeApplet", "Started"); }
 
-static void home_pause(applet_t *applet) { printf("[HomeApplet] Paused\n"); }
+static void home_pause(applet_t *applet) { log_debug("HomeApplet", "Paused"); }
 
-static void home_resume(applet_t *applet) { printf("[HomeApplet] Resumed\n"); }
+static void home_resume(applet_t *applet) {
+  log_debug("HomeApplet", "Resumed");
+}
 
-static void home_stop(applet_t *applet) { printf("[HomeApplet] Stopped\n"); }
+static void home_stop(applet_t *applet) { log_info("HomeApplet", "Stopped"); }
 
 static void home_destroy(applet_t *applet) {
-  printf("[HomeApplet] Destroying\n");
+  log_info("HomeApplet", "Destroying");
   if (applet->user_data) {
     lv_mem_free(applet->user_data);
     applet->user_data = NULL;

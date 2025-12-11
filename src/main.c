@@ -1,9 +1,13 @@
 #include "applet_manager.h"
 #include "baresip_manager.h"
+#include "config_manager.h" // Added for config_manager_init and config_load_app_settings
+#include "history_manager.h"
+#include "logger.h"
 #include "lv_drivers/sdl/sdl.h"
 #include "lvgl.h"
 #include <SDL.h>
 #include <stdio.h>
+#include <string.h> // Added for memset
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -70,7 +74,7 @@ static int init_display(void) {
 
   lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
   if (!disp) {
-    printf("Failed to register display driver\n");
+    log_error("Main", "Failed to register display driver");
     return -1;
   }
 
@@ -100,28 +104,40 @@ static int init_display(void) {
   indev_drv_wheel.read_cb = sdl_mousewheel_read;
   lv_indev_drv_register(&indev_drv_wheel);
 
-  printf("LVGL display initialized with SDL2 (%dx%d)\n", SDL_HOR_RES,
-         SDL_VER_RES);
+  log_info("Main", "LVGL display initialized with SDL2 (%dx%d)", SDL_HOR_RES,
+           SDL_VER_RES);
   return 0;
 }
 
 int main(void) {
-  printf("=== LVGL Applet Manager with SDL2 ===\n");
+  log_info("Main", "=== LVGL Applet Manager with SDL2 ===");
 
   // Initialize LVGL display
   if (init_display() != 0) {
-    printf("Failed to initialize display\n");
+    log_error("Main", "Failed to initialize display");
     return 1;
+  }
+
+  // Initialize config manager
+  config_manager_init();
+
+  // Load config to set log level early
+  app_config_t config;
+  memset(&config, 0, sizeof(app_config_t));
+  if (config_load_app_settings(&config) == 0) {
+    logger_init(config.log_level);
+  } else {
+    logger_init(LOG_LEVEL_INFO);
   }
 
   // Initialize applet manager
   if (applet_manager_init() != 0) {
-    fprintf(stderr, "Failed to initialize applet manager\n");
+    log_error("Main", "Failed to initialize applet manager");
     goto cleanup;
   }
 
   // Register all applets
-  printf("\nRegistering applets...\n");
+  log_info("Main", "Registering applets...");
   home_applet_register();
   settings_applet_register();
   calculator_applet_register();
@@ -130,7 +146,7 @@ int main(void) {
   call_log_applet_register();
 
   // Force initialization of Call applet to start background SIP services
-  printf("\nInitializing background services...\n");
+  log_info("Main", "Initializing background services...");
   int count = 0;
   applet_t **applets = applet_manager_get_all(&count);
   if (applets) {
@@ -139,9 +155,10 @@ int main(void) {
           strcmp(applets[i]->name, "Call") == 0) {
         if (applets[i]->callbacks.init) {
           if (applets[i]->callbacks.init(applets[i]) != 0) {
-            printf("Failed to initialize Call applet background services\n");
+            log_error("Main",
+                      "Failed to initialize Call applet background services");
           } else {
-            printf("Call applet background services initialized\n");
+            log_info("Main", "Call applet background services initialized");
           }
         }
         break;
@@ -150,26 +167,26 @@ int main(void) {
   }
 
   // Launch home screen
-  printf("\nLaunching home screen...\n");
+  log_info("Main", "Launching home screen...");
   if (applet_manager_launch("Home") != 0) {
-    printf("Failed to launch home screen\n");
+    log_error("Main", "Failed to launch home screen");
     return 1;
   }
 
-  printf("\n=== Applet Manager Running ===\n");
-  printf("Use mouse to interact with the UI\n");
-  printf("Press ESC or close window to exit\n\n");
+  log_info("Main", "=== Applet Manager Running ===");
+  log_info("Main", "Use mouse to interact with the UI");
+  log_info("Main", "Press ESC or close window to exit");
 
   // Start Baresip main loop with UI callback
   last_tick = get_tick_ms();
   baresip_manager_loop(ui_loop_cb, 5); // 5ms interval for UI updates
 
 cleanup:
-  printf("\n=== Shutting down ===\n");
+  log_info("Main", "=== Shutting down ===");
 
   // Cleanup
   applet_manager_destroy();
 
-  printf("Applet Manager exited successfully!\n");
+  log_info("Main", "Applet Manager exited successfully!");
   return 0;
 }

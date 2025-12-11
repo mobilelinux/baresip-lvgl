@@ -1,6 +1,7 @@
 #ifndef CONFIG_MANAGER_H
 #define CONFIG_MANAGER_H
 
+#include "logger.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -70,6 +71,7 @@ typedef struct {
   // Media
   int video_frame_size; // 0=1280x720 (Default)
   audio_codec_t preferred_codec;
+  int log_level;
 
   // Account
   int default_account_index;

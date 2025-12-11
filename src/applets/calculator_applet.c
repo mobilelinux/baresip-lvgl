@@ -1,5 +1,6 @@
 #include "applet.h"
 #include "applet_manager.h"
+#include "logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,7 +119,7 @@ static void clear_btn_clicked(lv_event_t *e) {
 }
 
 static int calculator_init(applet_t *applet) {
-  printf("[CalculatorApplet] Initializing\n");
+  log_info("CalculatorApplet", "Initializing");
 
   // Allocate applet data
   calc_data_t *data = lv_mem_alloc(sizeof(calc_data_t));
@@ -208,23 +209,23 @@ static int calculator_init(applet_t *applet) {
 }
 
 static void calculator_start(applet_t *applet) {
-  printf("[CalculatorApplet] Started\n");
+  log_info("CalculatorApplet", "Started");
 }
 
 static void calculator_pause(applet_t *applet) {
-  printf("[CalculatorApplet] Paused\n");
+  log_debug("CalculatorApplet", "Paused");
 }
 
 static void calculator_resume(applet_t *applet) {
-  printf("[CalculatorApplet] Resumed\n");
+  log_debug("CalculatorApplet", "Resumed");
 }
 
 static void calculator_stop(applet_t *applet) {
-  printf("[CalculatorApplet] Stopped\n");
+  log_info("CalculatorApplet", "Stopped");
 }
 
 static void calculator_destroy(applet_t *applet) {
-  printf("[CalculatorApplet] Destroying\n");
+  log_info("CalculatorApplet", "Destroying");
   if (applet->user_data) {
     lv_mem_free(applet->user_data);
     applet->user_data = NULL;

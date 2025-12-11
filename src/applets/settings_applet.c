@@ -2,9 +2,11 @@
 #include "applet_manager.h"
 #include "baresip_manager.h"
 #include "config_manager.h"
+#include "logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // Settings applet data
 typedef struct {
@@ -31,6 +33,7 @@ typedef struct {
 
   // Call Settings Widgets
   lv_obj_t *call_start_auto_sw;
+  lv_obj_t *call_log_level_dd;
   lv_obj_t *call_listen_addr_ta;
   lv_obj_t *call_addr_fam_dd;
   lv_obj_t *call_dns_ta;
@@ -103,14 +106,15 @@ static bool is_codec_enabled(const char *list, const char *codec) {
   if (!list || !codec)
     return false;
   char *dup = strdup(list);
-  char *tok = strtok(dup, ",");
+  char *saveptr;
+  char *tok = strtok_r(dup, ",", &saveptr);
   bool found = false;
   while (tok) {
     if (strcmp(tok, codec) == 0) {
       found = true;
       break;
     }
-    tok = strtok(NULL, ",");
+    tok = strtok_r(NULL, ",", &saveptr);
   }
   free(dup);
   return found;
@@ -158,7 +162,7 @@ static void back_to_main(lv_event_t *e) {
 // Event handler for settings items
 static void setting_item_clicked(lv_event_t *e) {
   const char *text = lv_event_get_user_data(e);
-  printf("[SettingsApplet] Clicked: %s\n", text);
+  log_info("SettingsApplet", "Clicked: %s", text);
 }
 
 static void call_settings_clicked(lv_event_t *e) {
@@ -219,7 +223,7 @@ static void delete_account_clicked(lv_event_t *e) {
   save_settings(data);
   refresh_account_list(data);
   update_account_dropdowns(data);
-  printf("[SettingsApplet] Account deleted\n");
+  log_info("SettingsApplet", "Account deleted");
 }
 
 static void save_account_clicked(lv_event_t *e) {
@@ -231,7 +235,7 @@ static void save_account_clicked(lv_event_t *e) {
 
   if (data->editing_account_index == -1) {
     if (data->account_count >= MAX_ACCOUNTS) {
-      printf("[SettingsApplet] Maximum accounts reached\n");
+      log_warn("SettingsApplet", "Maximum accounts reached");
       return;
     }
     acc = &data->accounts[data->account_count++];
@@ -298,7 +302,8 @@ static void save_account_clicked(lv_event_t *e) {
   }
 
   show_account_settings(data);
-  printf("[SettingsApplet] Account saved: %s@%s\n", acc->username, acc->server);
+  log_info("SettingsApplet", "Account saved: %s@%s", acc->username,
+           acc->server);
 }
 
 static void codec_changed(lv_event_t *e) {
@@ -309,8 +314,8 @@ static void codec_changed(lv_event_t *e) {
   data->config.preferred_codec = lv_dropdown_get_selected(dropdown);
   save_settings(data);
 
-  printf("[SettingsApplet] Codec changed to: %s\n",
-         config_get_codec_name(data->config.preferred_codec));
+  log_debug("SettingsApplet", "Codec changed to: %s",
+            config_get_codec_name(data->config.preferred_codec));
 }
 
 static void default_account_changed(lv_event_t *e) {
@@ -320,8 +325,8 @@ static void default_account_changed(lv_event_t *e) {
 
   data->config.default_account_index = lv_dropdown_get_selected(dropdown);
   save_settings(data);
-  printf("[SettingsApplet] Default account changed to index: %d\n",
-         data->config.default_account_index);
+  log_debug("SettingsApplet", "Default account changed to index: %d",
+            data->config.default_account_index);
 }
 
 // Screen builders
@@ -372,13 +377,13 @@ static void update_account_dropdowns(settings_data_t *data) {
 
 static void refresh_account_list(settings_data_t *data) {
   lv_obj_clean(data->account_list);
-  printf("[SettingsApplet] Refreshing account list. Count: %d\n",
-         data->account_count);
+  log_info("SettingsApplet", "Refreshing account list. Count: %d",
+           data->account_count);
 
   for (int i = 0; i < data->account_count; i++) {
     voip_account_t *acc = &data->accounts[i];
-    printf("[SettingsApplet] Rendering account %d: %s (User: %s)\n", i,
-           acc->display_name, acc->username);
+    log_debug("SettingsApplet", "Rendering account %d: %s (User: %s)", i,
+              acc->display_name, acc->username);
 
     lv_obj_t *item = lv_obj_create(data->account_list);
     lv_obj_set_size(item, LV_PCT(100), 70);
@@ -423,22 +428,26 @@ static void refresh_account_list(settings_data_t *data) {
 
     lv_obj_t *edit_btn = lv_btn_create(btns);
     lv_obj_set_size(edit_btn, 40, 40);
+    lv_obj_set_style_bg_opa(edit_btn, 0, 0);       // Transparent
+    lv_obj_set_style_shadow_width(edit_btn, 0, 0); // No shadow
     lv_obj_t *edit_lbl = lv_label_create(edit_btn);
     lv_label_set_text(edit_lbl, LV_SYMBOL_EDIT);
     lv_obj_center(edit_lbl);
-    // Explicitly set symbol font to ensure it fits and is visible
-    lv_obj_set_style_text_font(edit_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(edit_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(edit_lbl, lv_palette_main(LV_PALETTE_BLUE), 0);
     lv_obj_add_event_cb(edit_btn, edit_account_clicked, LV_EVENT_CLICKED,
                         (void *)(intptr_t)i);
 
     lv_obj_t *del_btn = lv_btn_create(btns);
     lv_obj_set_size(del_btn, 40, 40);
-    lv_obj_set_style_bg_color(del_btn, lv_color_hex(0xFF0000), 0);
-    lv_obj_set_style_pad_left(del_btn, 10, 0); // Add marginal spacing
+    lv_obj_set_style_bg_opa(del_btn, 0, 0);       // Transparent
+    lv_obj_set_style_shadow_width(del_btn, 0, 0); // No shadow
+    lv_obj_set_style_pad_left(del_btn, 10, 0);
     lv_obj_t *del_lbl = lv_label_create(del_btn);
     lv_label_set_text(del_lbl, LV_SYMBOL_TRASH);
     lv_obj_center(del_lbl);
-    lv_obj_set_style_text_font(del_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(del_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(del_lbl, lv_palette_main(LV_PALETTE_RED), 0);
     lv_obj_add_event_cb(del_btn, delete_account_clicked, LV_EVENT_CLICKED,
                         (void *)(intptr_t)i);
   }
@@ -778,7 +787,7 @@ static void show_call_settings(settings_data_t *data) {
   lv_obj_add_event_cb(back_btn, back_to_main, LV_EVENT_CLICKED, data);
 
   lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "Settings");
+  lv_label_set_text(title, "System Settings");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
 
   lv_obj_t *save_btn = lv_btn_create(header);
@@ -799,6 +808,11 @@ static void show_call_settings(settings_data_t *data) {
   // Form Fields
   data->call_start_auto_sw = create_switch_row(
       content, "Start Automatically", data->config.start_automatically);
+
+  // Log Level
+  data->call_log_level_dd = create_dropdown_row(
+      content, "Log Level", "TRACE\nDEBUG\nINFO\nWARN\nERROR\nFATAL",
+      data->config.log_level);
 
   lv_obj_t *listen_ta = lv_textarea_create(content);
   lv_obj_set_width(listen_ta, LV_PCT(100));
@@ -868,6 +882,10 @@ static void save_call_settings(settings_data_t *data) {
 
   data->config.start_automatically =
       lv_obj_has_state(data->call_start_auto_sw, LV_STATE_CHECKED);
+
+  data->config.log_level = lv_dropdown_get_selected(data->call_log_level_dd);
+  logger_set_level((log_level_t)data->config.log_level);
+
   strncpy(data->config.listen_address,
           lv_textarea_get_text(data->call_listen_addr_ta),
           sizeof(data->config.listen_address) - 1);
@@ -1075,8 +1093,7 @@ static void show_account_form(settings_data_t *data) {
 }
 
 static int settings_init(applet_t *applet) {
-  printf("[SettingsApplet] Initializing\n");
-
+  log_info("SettingsApplet", "Initializing");
   settings_data_t *data = lv_mem_alloc(sizeof(settings_data_t));
   if (!data)
     return -1;
@@ -1130,7 +1147,7 @@ static int settings_init(applet_t *applet) {
   lv_obj_align(main_list, LV_ALIGN_BOTTOM_MID, 0, -20);
 
   lv_obj_t *btn_call =
-      lv_list_add_btn(main_list, LV_SYMBOL_SETTINGS, "Call Settings");
+      lv_list_add_btn(main_list, LV_SYMBOL_SETTINGS, "System Settings");
   lv_obj_add_event_cb(btn_call, call_settings_clicked, LV_EVENT_CLICKED, NULL);
 
   lv_obj_t *btn_acc =
@@ -1251,7 +1268,7 @@ void settings_open_call_settings(void) {
 }
 
 static void settings_start(applet_t *applet) {
-  printf("[SettingsApplet] Started\n");
+  log_info("SettingsApplet", "Started");
   settings_data_t *data = (settings_data_t *)applet->user_data;
 
   if (target_screen == SETTINGS_SCREEN_ACCOUNTS) {
@@ -1265,11 +1282,11 @@ static void settings_start(applet_t *applet) {
 }
 
 static void settings_pause(applet_t *applet) {
-  printf("[SettingsApplet] Paused\n");
+  log_info("SettingsApplet", "Paused");
 }
 
 static void settings_resume(applet_t *applet) {
-  printf("[SettingsApplet] Resumed\n");
+  log_info("SettingsApplet", "Resumed");
   settings_data_t *data = (settings_data_t *)applet->user_data;
 
   // Handle Deep Links on Resume
@@ -1283,7 +1300,7 @@ static void settings_resume(applet_t *applet) {
 }
 
 static void settings_stop(applet_t *applet) {
-  printf("[SettingsApplet] Stopped\n");
+  log_info("SettingsApplet", "Stopped");
 }
 
 static void settings_destroy(applet_t *applet) {

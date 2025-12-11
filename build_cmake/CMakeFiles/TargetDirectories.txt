@@ -1,0 +1,3 @@
+/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles/baresip-lvgl.dir
+/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles/edit_cache.dir
+/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles/rebuild_cache.dir

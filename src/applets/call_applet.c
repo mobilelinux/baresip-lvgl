@@ -1,5 +1,6 @@
 #include "applet.h"
 #include "applet_manager.h"
+#include "logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,15 +112,15 @@ static int copy_file(const char *src_path, const char *dst_path) {
 
 // Load settings from files
 static void load_settings(call_data_t *data) {
-  printf("[CallApplet] Loading settings via ConfigManager\n");
+  log_info("CallApplet", "Loading settings via ConfigManager");
   if (config_load_app_settings(&data->config) != 0) {
     data->config.preferred_codec = CODEC_OPUS;
     data->config.default_account_index = 0;
   }
   data->account_count = config_load_accounts(data->accounts, MAX_ACCOUNTS);
-  printf("[CallApplet] Settings loaded: Codec=%s, AccCount=%d\n",
-         config_get_codec_name(data->config.preferred_codec),
-         data->account_count);
+  log_info("CallApplet", "Settings loaded: Codec=%s, AccCount=%d",
+           config_get_codec_name(data->config.preferred_codec),
+           data->account_count);
 }
 
 // Save settings to files
@@ -152,7 +153,7 @@ static void reg_status_callback(const char *aor, reg_status_t status) {
   if (!g_call_data || !aor)
     return;
 
-  printf("[CallApplet] Registration status update: %s -> %d\n", aor, status);
+  log_debug("CallApplet", "Registration status update: %s -> %d", aor, status);
 
   for (int i = 0; i < g_call_data->account_count; i++) {
     if (strstr(aor, g_call_data->accounts[i].server) &&
@@ -436,7 +437,7 @@ static void number_btn_clicked(lv_event_t *e) {
 
   if (data->active_call_screen &&
       !lv_obj_has_flag(data->active_call_screen, LV_OBJ_FLAG_HIDDEN)) {
-    printf("[CallApplet] DTMF: %s\n", digit);
+    log_debug("CallApplet", "DTMF: %s", digit);
     return;
   }
 
@@ -468,7 +469,7 @@ static void call_btn_clicked(lv_event_t *e) {
   call_data_t *data = (call_data_t *)applet->user_data;
 
   if (strlen(data->number_buffer) > 0) {
-    printf("[CallApplet] Calling: %s\n", data->number_buffer);
+    log_info("CallApplet", "Calling: %s", data->number_buffer);
     baresip_manager_call(data->number_buffer);
     show_active_call_screen(data, data->number_buffer, false);
   }
@@ -476,7 +477,7 @@ static void call_btn_clicked(lv_event_t *e) {
 
 static void answer_btn_clicked(lv_event_t *e) {
   (void)e;
-  printf("[CallApplet] Answer clicked\n");
+  log_info("CallApplet", "Answer clicked");
   baresip_manager_answer();
 }
 
@@ -487,12 +488,12 @@ static void hangup_btn_clicked(lv_event_t *e) {
 
   // Prevent accidental hangup causing immediate CANCEL due to UI overlap/bounce
   if (lv_tick_get() - data->call_start_time < 1000) {
-    printf(
-        "[CallApplet] Ignoring hangup click (debounce protection, <1000ms)\n");
+    log_warn("CallApplet",
+             "Ignoring hangup click (debounce protection, <1000ms)");
     return;
   }
 
-  printf("[CallApplet] Hangup clicked\n");
+  log_info("CallApplet", "Hangup clicked");
   baresip_manager_hangup();
   show_dialer_screen(data);
 }
@@ -506,7 +507,7 @@ static void mute_btn_clicked(lv_event_t *e) {
     lv_obj_add_state(data->mute_btn, LV_STATE_CHECKED);
   else
     lv_obj_clear_state(data->mute_btn, LV_STATE_CHECKED);
-  printf("[CallApplet] Mute: %d\n", data->is_muted);
+  log_info("CallApplet", "Mute: %d", data->is_muted);
 }
 
 static void speaker_btn_clicked(lv_event_t *e) {
@@ -518,7 +519,7 @@ static void speaker_btn_clicked(lv_event_t *e) {
     lv_obj_add_state(data->speaker_btn, LV_STATE_CHECKED);
   else
     lv_obj_clear_state(data->speaker_btn, LV_STATE_CHECKED);
-  printf("[CallApplet] Speaker: %d\n", data->is_speaker);
+  log_info("CallApplet", "Speaker: %d", data->is_speaker);
 }
 
 static void hold_btn_clicked(lv_event_t *e) {
@@ -533,7 +534,7 @@ static void hold_btn_clicked(lv_event_t *e) {
     lv_obj_clear_state(data->hold_btn, LV_STATE_CHECKED);
     lv_label_set_text(data->call_status_label, "Connected");
   }
-  printf("[CallApplet] Hold: %d\n", data->is_hold);
+  log_info("CallApplet", "Hold: %d", data->is_hold);
 }
 
 static void update_call_duration(lv_timer_t *timer) {
@@ -574,8 +575,8 @@ static void update_account_dropdowns(call_data_t *data) {
 
 // Callback for call state changes from Baresip Manager
 static void on_call_state_change(enum call_state state, const char *peer_uri) {
-  printf("[CallApplet] OnCallStateChange: State=%d, Peer=%s, Data=%p\n", state,
-         peer_uri ? peer_uri : "unknown", (void *)g_call_data);
+  log_debug("CallApplet", "OnCallStateChange: State=%d, Peer=%s", state,
+            peer_uri ? peer_uri : "unknown");
 
   // Always launch applet for incoming/established calls, even if not
   // authorized/initialized yet
@@ -584,7 +585,7 @@ static void on_call_state_change(enum call_state state, const char *peer_uri) {
   }
 
   if (!g_call_data) {
-    printf("[CallApplet] g_call_data is NULL, skipping valid update\n");
+    log_error("CallApplet", "g_call_data is NULL, skipping valid update");
     return;
   }
 
@@ -630,7 +631,7 @@ static void on_call_state_change(enum call_state state, const char *peer_uri) {
 }
 
 static int call_init(applet_t *applet) {
-  printf("[CallApplet] Initializing\n");
+  log_info("CallApplet", "Initializing");
 
   call_data_t *data = lv_mem_alloc(sizeof(call_data_t));
   memset(data, 0, sizeof(call_data_t));
@@ -641,7 +642,8 @@ static int call_init(applet_t *applet) {
   data->config.preferred_codec = CODEC_OPUS;
   data->current_state = CALL_STATE_IDLE;
   data->current_state = baresip_manager_get_state();
-  printf("[CallApplet] CallInit: Fetched State=%d\n", data->current_state);
+  data->current_state = baresip_manager_get_state();
+  log_debug("CallApplet", "CallInit: Fetched State=%d", data->current_state);
 
   const char *current_peer = baresip_manager_get_peer();
   if (current_peer) {
@@ -655,9 +657,9 @@ static int call_init(applet_t *applet) {
   g_call_data = data;
   static int baresip_initialized = 0;
   if (!baresip_initialized) {
-    printf("[CallApplet] Initializing baresip manager\n");
+    log_info("CallApplet", "Initializing baresip manager");
     if (baresip_manager_init() != 0) {
-      printf("[CallApplet] Failed to initialize baresip manager\n");
+      log_error("CallApplet", "Failed to initialize baresip manager");
       lv_mem_free(data);
       return -1;
     }
@@ -672,11 +674,11 @@ static int call_init(applet_t *applet) {
   baresip_manager_set_callback(on_call_state_change);
   load_settings(data);
 
-  printf("[CallApplet] Auto-registering enabled accounts...\n");
+  log_info("CallApplet", "Auto-registering enabled accounts...");
   for (int i = 0; i < data->account_count; i++) {
     if (data->accounts[i].enabled) {
-      printf("[CallApplet] Registering account %d: %s@%s\n", i,
-             data->accounts[i].username, data->accounts[i].server);
+      log_info("CallApplet", "Registering account %d: %s@%s", i,
+               data->accounts[i].username, data->accounts[i].server);
       baresip_manager_add_account(&data->accounts[i]);
       data->account_status[i] = REG_STATUS_REGISTERING;
     } else {
@@ -908,13 +910,13 @@ static int call_init(applet_t *applet) {
 
 static void call_start(applet_t *applet) {
   call_data_t *data = (call_data_t *)applet->user_data;
-  printf("[CallApplet] Started\n");
+  log_info("CallApplet", "Started");
   show_dialer_screen(data);
 }
 
 static void call_pause(applet_t *applet) {
   (void)applet;
-  printf("[CallApplet] Paused\n");
+  log_info("CallApplet", "Paused");
 }
 
 static void call_resume(applet_t *applet) {
@@ -929,9 +931,9 @@ static void call_resume(applet_t *applet) {
     data->current_peer_uri[0] = '\0';
   }
 
-  printf("[CallApplet] Resuming. State=%d, ActiveCallScreen=%p, Incoming=%s\n",
-         data->current_state, (void *)data->active_call_screen,
-         (data->current_state == CALL_STATE_INCOMING) ? "YES" : "NO");
+  log_info("CallApplet", "Resuming. State=%d, ActiveCallScreen=%p, Incoming=%s",
+           data->current_state, (void *)data->active_call_screen,
+           (data->current_state == CALL_STATE_INCOMING) ? "YES" : "NO");
 
   // Always refresh active call screen data if we are in a call
   if (data->current_state == CALL_STATE_INCOMING ||
@@ -942,8 +944,8 @@ static void call_resume(applet_t *applet) {
 
     // Safety check: ensure screen exists
     if (!data->active_call_screen) {
-      printf("[CallApplet] WARNING: Active Call Screen is NULL in Resume! "
-             "Recreating...\n");
+      log_warn("CallApplet", "WARNING: Active Call Screen is NULL in Resume! "
+                             "Recreating...");
       // This shouldn't happen if init ran, but good for debug
     }
 
@@ -958,11 +960,11 @@ static void call_resume(applet_t *applet) {
 
 static void call_stop(applet_t *applet) {
   (void)applet;
-  printf("[CallApplet] Stopped\n");
+  log_info("CallApplet", "Stopped");
 }
 
 static void call_destroy(applet_t *applet) {
-  printf("[CallApplet] Destroying\n");
+  log_info("CallApplet", "Destroying");
   g_call_data = NULL; // Prevent dangling pointer
   if (applet->user_data) {
     lv_mem_free(applet->user_data);

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/steven/dev/baresip-lvgl/build_cmake/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -2,6 +2,7 @@
 #include "applet_manager.h"
 #include "baresip_manager.h"
 #include "contact_manager.h"
+#include "logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,7 +83,7 @@ static void save_btn_clicked(lv_event_t *e) {
   bool fav = lv_obj_has_state(fav_sw, LV_STATE_CHECKED);
 
   if (strlen(name) == 0 || strlen(number) == 0) {
-    printf("[Contacts] Validation failed: Empty fields\n");
+    log_warn("ContactsApplet", "Validation failed: Empty fields");
     return;
   }
 
@@ -175,12 +176,13 @@ static void draw_list(void) {
     lv_obj_t *edit_btn = lv_btn_create(item);
     lv_obj_set_size(edit_btn, 40, 40);
     lv_obj_align(edit_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_color(edit_btn, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(edit_btn, 0, 0);
     lv_obj_set_style_shadow_width(edit_btn, 0, 0);
 
     lv_obj_t *edit_icon = lv_label_create(edit_btn);
     lv_label_set_text(edit_icon, LV_SYMBOL_EDIT);
     lv_obj_set_style_text_color(edit_icon, lv_palette_main(LV_PALETTE_TEAL), 0);
+    lv_obj_set_style_text_font(edit_icon, &lv_font_montserrat_20, 0);
     lv_obj_center(edit_icon);
 
     lv_obj_add_event_cb(edit_btn, edit_btn_clicked, LV_EVENT_CLICKED,
