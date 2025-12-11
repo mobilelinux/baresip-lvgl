@@ -1,0 +1,11 @@
+prefix="/Users/steven/dev/baresip-lvgl/install"
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libbaresip
+Description: 
+Version: 4.3.0
+URL: 
+Libs: -L${libdir} -lbaresip
+Cflags: -I${includedir}

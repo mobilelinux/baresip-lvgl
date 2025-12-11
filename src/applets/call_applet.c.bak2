@@ -1,0 +1,953 @@
+#include "applet.h"
+#include "applet_manager.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define MAX_ACCOUNTS 10
+#define CONFIG_DIR ".baresip-lvgl"
+
+#include "baresip_manager.h"
+#include "config_manager.h"
+
+// Audio codec enumeration
+// audio_codec_t defined in config_manager.h
+
+static const char *codec_names[] = {"G.711 PCMU", "G.711 PCMA", "Opus", "G.722",
+                                    "GSM"};
+
+// voip_account_t is now in config_manager.h
+
+// Call applet data
+typedef struct {
+  // Screens
+  lv_obj_t *dialer_screen;
+  lv_obj_t *settings_screen;
+  lv_obj_t *account_form_screen;
+
+  // Dialer widgets
+  lv_obj_t *number_label;
+  char number_buffer[64];
+
+  // Settings data
+  audio_codec_t preferred_codec;
+  voip_account_t accounts[MAX_ACCOUNTS];
+  int account_count;
+  int editing_account_index;                 // -1 for new, >= 0 for edit
+  int default_account_index;                 // Index of default account
+  reg_status_t account_status[MAX_ACCOUNTS]; // Registration status per account
+
+  // Settings widgets
+  lv_obj_t *codec_dropdown;
+  lv_obj_t *default_account_dropdown;
+  lv_obj_t *account_list;
+  lv_obj_t *dialer_status_icon;
+
+  // Dialer widgets
+  lv_obj_t *dialer_account_dropdown;
+
+  // Account form widgets
+  lv_obj_t *form_name_ta;
+  lv_obj_t *form_user_ta;
+  lv_obj_t *form_pass_ta;
+  lv_obj_t *form_server_ta;
+  lv_obj_t *form_port_ta;
+  lv_obj_t *form_realm_ta;
+  lv_obj_t *form_active_sw;
+} call_data_t;
+
+// Helper to sanitize input (replace | with _)
+static void sanitize_input(char *str) {
+  for (int i = 0; str[i]; i++) {
+    if (str[i] == '|')
+      str[i] = '_';
+  }
+}
+
+// Global pointer to current applet data for callback
+static call_data_t *g_call_data = NULL;
+
+// Forward declarations
+static void show_dialer_screen(call_data_t *data);
+static void show_settings_screen(call_data_t *data);
+static void show_account_form(call_data_t *data, int account_index);
+static void load_settings(call_data_t *data);
+static void save_settings(call_data_t *data);
+static void refresh_account_list(call_data_t *data);
+static void update_account_status(call_data_t *data, int account_idx,
+                                  reg_status_t status);
+static void reg_status_callback(const char *aor, reg_status_t status);
+
+// Get config directory path
+static void get_config_dir(char *path, size_t size) {
+  const char *home = getenv("HOME");
+  if (home) {
+    snprintf(path, size, "%s/%s", home, CONFIG_DIR);
+  } else {
+    snprintf(path, size, "%s", CONFIG_DIR);
+  }
+}
+
+// Ensure config directory exists
+static void ensure_config_dir(void) {
+  char path[256];
+  get_config_dir(path, sizeof(path));
+  mkdir(path, 0755);
+}
+
+// Load settings from files
+static void load_settings(call_data_t *data) {
+  char path[256];
+  FILE *fp;
+
+  // Load general settings (codec, default account)
+  get_config_dir(path, sizeof(path));
+  strcat(path, "/settings.conf");
+  fp = fopen(path, "r");
+  if (fp) {
+    if (fscanf(fp, "%d|%d", (int *)&data->preferred_codec,
+               &data->default_account_index) != 2) {
+      // Fallback for old format or error
+      data->preferred_codec = CODEC_OPUS;
+      data->default_account_index = 0;
+    }
+    fclose(fp);
+  } else {
+    // Try loading old codec.conf for backward compatibility
+    get_config_dir(path, sizeof(path));
+    strcat(path, "/codec.conf");
+    fp = fopen(path, "r");
+    if (fp) {
+      fscanf(fp, "%d", (int *)&data->preferred_codec);
+      fclose(fp);
+    } else {
+      data->preferred_codec = CODEC_OPUS; // Default
+    }
+    data->default_account_index = 0;
+  }
+
+  // Load accounts
+  get_config_dir(path, sizeof(path));
+  strcpy(strrchr(path, '/') + 1, "accounts.conf");
+  fp = fopen(path, "r");
+  data->account_count = 0;
+  if (fp) {
+    while (data->account_count < MAX_ACCOUNTS && !feof(fp)) {
+      voip_account_t *acc = &data->accounts[data->account_count];
+      int matched =
+          fscanf(fp, "%63[^|]|%63[^|]|%63[^|]|%127[^|]|%d|%d|%63[^\n]\n",
+                 acc->display_name, acc->username, acc->password, acc->server,
+                 &acc->port, (int *)&acc->enabled, acc->realm);
+
+      if (matched >= 6) {
+        if (matched == 6)
+          acc->realm[0] = '\0';
+        data->account_count++;
+      } else {
+        // Consume
+        int c;
+        while ((c = fgetc(fp)) != '\n' && c != EOF)
+          ;
+      }
+    }
+    fclose(fp);
+  }
+
+  if (data->default_account_index >= data->account_count) {
+    data->default_account_index = 0;
+  }
+
+  // Auto-register enabled accounts
+  printf("[CallApplet] Auto-registering enabled accounts...\n");
+  for (int i = 0; i < data->account_count; i++) {
+    if (data->accounts[i].enabled) {
+      printf("[CallApplet] Registering account %d: %s@%s\n", i,
+             data->accounts[i].username, data->accounts[i].server);
+      int err = baresip_manager_add_account(&data->accounts[i]);
+      if (err) {
+        printf("[CallApplet] Failed to register account: error %d\n", err);
+      }
+      data->account_status[i] = REG_STATUS_REGISTERING;
+    } else {
+      data->account_status[i] = REG_STATUS_NONE;
+    }
+  }
+  printf("[CallApplet] Loaded %d accounts\n", data->account_count);
+}
+
+// Save settings to files
+static void save_settings(call_data_t *data) {
+  char path[256];
+  FILE *fp;
+
+  ensure_config_dir();
+
+  // Save general settings
+  get_config_dir(path, sizeof(path));
+  strcat(path, "/settings.conf");
+  fp = fopen(path, "w");
+  if (fp) {
+    fprintf(fp, "%d|%d\n", data->preferred_codec, data->default_account_index);
+    fclose(fp);
+  }
+
+  // Save accounts
+  get_config_dir(path, sizeof(path));
+  strcpy(strrchr(path, '/') + 1, "accounts.conf");
+  fp = fopen(path, "w");
+  if (fp) {
+    for (int i = 0; i < data->account_count; i++) {
+      voip_account_t *acc = &data->accounts[i];
+      fprintf(fp, "%s|%s|%s|%s|%d|%d|%s\n", acc->display_name, acc->username,
+              acc->password, acc->server, acc->port, acc->enabled, acc->realm);
+    }
+    fclose(fp);
+  }
+
+  // Auto-register active accounts
+  for (int i = 0; i < data->account_count; i++) {
+    if (data->accounts[i].enabled) {
+      printf("[CallApplet] Auto-registering account: %s@%s\n",
+             data->accounts[i].username, data->accounts[i].server);
+      baresip_manager_add_account(&data->accounts[i]);
+      data->account_status[i] = REG_STATUS_REGISTERING;
+    }
+  }
+}
+
+// Registration status callback
+static void reg_status_callback(const char *aor, reg_status_t status) {
+  if (!g_call_data || !aor)
+    return;
+
+  printf("[CallApplet] Registration status update: %s -> %d\n", aor, status);
+
+  // Find matching account and update status
+  for (int i = 0; i < g_call_data->account_count; i++) {
+    char account_aor[256];
+    snprintf(account_aor, sizeof(account_aor), "sip:%s@%s",
+             g_call_data->accounts[i].username,
+             g_call_data->accounts[i].server);
+
+    // Match against AOR (may need fuzzy matching)
+    if (strstr(aor, g_call_data->accounts[i].server) &&
+        strstr(aor, g_call_data->accounts[i].username)) {
+      update_account_status(g_call_data, i, status);
+      break;
+    }
+  }
+}
+
+// Update account registration status and UI
+static void update_account_status(call_data_t *data, int account_idx,
+                                  reg_status_t status) {
+  if (!data || account_idx < 0 || account_idx >= data->account_count)
+    return;
+
+  printf("[CallApplet] Updating account %d status to %d\n", account_idx,
+         status);
+
+  data->account_status[account_idx] = status;
+
+  // Update dialer status icon if showing default account (only if UI is ready)
+  if (account_idx == data->default_account_index && data->dialer_status_icon) {
+    lv_color_t color;
+    switch (status) {
+    case REG_STATUS_REGISTERED:
+      color = lv_color_hex(0x00AA00); // Green
+      printf("[CallApplet] Status icon: GREEN (registered)\n");
+      break;
+    case REG_STATUS_FAILED:
+      color = lv_color_hex(0xFF0000); // Red
+      printf("[CallApplet] Status icon: RED (failed)\n");
+      break;
+    case REG_STATUS_REGISTERING:
+      color = lv_color_hex(0x808080); // Gray
+      printf("[CallApplet] Status icon: GRAY (registering)\n");
+      break;
+    default:
+      color = lv_color_hex(0x404040); // Dark gray
+      printf("[CallApplet] Status icon: DARK GRAY (none)\n");
+      break;
+    }
+    lv_obj_set_style_bg_color(data->dialer_status_icon, color, 0);
+  } else {
+    printf("[CallApplet] Dialer UI not ready yet, status cached\n");
+  }
+
+  // Refresh account list in settings if visible (only if UI is ready)
+  if (data->settings_screen &&
+      !lv_obj_has_flag(data->settings_screen, LV_OBJ_FLAG_HIDDEN)) {
+    refresh_account_list(data);
+  }
+}
+
+// Event handlers
+static void back_to_dialer(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  show_dialer_screen(data);
+}
+
+static void back_to_settings(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  show_settings_screen(data);
+}
+
+static void settings_btn_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  show_settings_screen(data);
+}
+
+static void number_btn_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  const char *digit = lv_event_get_user_data(e);
+
+  size_t len = strlen(data->number_buffer);
+  if (len < sizeof(data->number_buffer) - 1) {
+    data->number_buffer[len] = digit[0];
+    data->number_buffer[len + 1] = '\0';
+    lv_label_set_text(data->number_label, data->number_buffer);
+  }
+}
+
+static void backspace_btn_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+
+  size_t len = strlen(data->number_buffer);
+  if (len > 0) {
+    data->number_buffer[len - 1] = '\0';
+    lv_label_set_text(data->number_label, data->number_buffer[0]
+                                              ? data->number_buffer
+                                              : "Enter number");
+  }
+}
+
+static void call_btn_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+
+  if (strlen(data->number_buffer) > 0) {
+    int account_idx = lv_dropdown_get_selected(data->dialer_account_dropdown);
+    const char *account_name = "Unknown";
+    if (account_idx >= 0 && account_idx < data->account_count) {
+      account_name = data->accounts[account_idx].display_name;
+    }
+
+    printf("[CallApplet] Calling: %s using Account: %s, Codec: %s\n",
+           data->number_buffer, account_name,
+           codec_names[data->preferred_codec]);
+    data->number_buffer[0] = '\0';
+    lv_label_set_text(data->number_label, "Enter number");
+  }
+}
+
+static void update_account_dropdowns(call_data_t *data) {
+  char options[1024] = "";
+  for (int i = 0; i < data->account_count; i++) {
+    if (i > 0)
+      strcat(options, "\n");
+    char entry[256];
+    snprintf(entry, sizeof(entry), "%s@%s", data->accounts[i].display_name,
+             data->accounts[i].server);
+    strcat(options, entry);
+  }
+
+  if (strlen(options) == 0)
+    strcpy(options, "No Accounts");
+
+  lv_dropdown_set_options(data->default_account_dropdown, options);
+  lv_dropdown_set_options(data->dialer_account_dropdown, options);
+
+  // Preserve selection if possible, otherwise clamp
+  if (data->default_account_index >= data->account_count)
+    data->default_account_index = 0;
+
+  lv_dropdown_set_selected(data->default_account_dropdown,
+                           data->default_account_index);
+  lv_dropdown_set_selected(data->dialer_account_dropdown,
+                           data->default_account_index);
+}
+
+static void codec_changed(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  lv_obj_t *dropdown = lv_event_get_target(e);
+
+  data->preferred_codec = lv_dropdown_get_selected(dropdown);
+  save_settings(data);
+  printf("[CallApplet] Codec changed to: %s\n",
+         codec_names[data->preferred_codec]);
+}
+
+static void default_account_changed(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  lv_obj_t *dropdown = lv_event_get_target(e);
+
+  data->default_account_index = lv_dropdown_get_selected(dropdown);
+  save_settings(data);
+  printf("[CallApplet] Default account changed to index: %d\n",
+         data->default_account_index);
+}
+
+static void add_account_btn_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  show_account_form(data, -1); // -1 = new account
+}
+
+static void edit_account_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  int index = (int)(intptr_t)lv_event_get_user_data(e);
+  show_account_form(data, index);
+}
+
+static void delete_account_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+  int index = (int)(intptr_t)lv_event_get_user_data(e);
+
+  // Shift accounts down
+  for (int i = index; i < data->account_count - 1; i++) {
+    data->accounts[i] = data->accounts[i + 1];
+  }
+  data->account_count--;
+
+  save_settings(data);
+  refresh_account_list(data);
+  update_account_dropdowns(data);
+  printf("[CallApplet] Account deleted\n");
+}
+
+static void save_account_clicked(lv_event_t *e) {
+  applet_t *applet = applet_manager_get_current();
+  call_data_t *data = (call_data_t *)applet->user_data;
+
+  voip_account_t *acc;
+  if (data->editing_account_index == -1) {
+    // New account
+    if (data->account_count >= MAX_ACCOUNTS) {
+      printf("[CallApplet] Maximum accounts reached\n");
+      return;
+    }
+    acc = &data->accounts[data->account_count++];
+  } else {
+    // Edit existing
+    acc = &data->accounts[data->editing_account_index];
+  }
+
+  // Get values from form
+  strncpy(acc->display_name, lv_textarea_get_text(data->form_name_ta),
+          sizeof(acc->display_name) - 1);
+  sanitize_input(acc->display_name);
+
+  strncpy(acc->username, lv_textarea_get_text(data->form_user_ta),
+          sizeof(acc->username) - 1);
+  sanitize_input(acc->username);
+
+  strncpy(acc->password, lv_textarea_get_text(data->form_pass_ta),
+          sizeof(acc->password) - 1);
+  sanitize_input(acc->password);
+
+  strncpy(acc->server, lv_textarea_get_text(data->form_server_ta),
+          sizeof(acc->server) - 1);
+  sanitize_input(acc->server);
+
+  strncpy(acc->realm, lv_textarea_get_text(data->form_realm_ta),
+          sizeof(acc->realm) - 1);
+  sanitize_input(acc->realm);
+
+  acc->port = atoi(lv_textarea_get_text(data->form_port_ta));
+  acc->enabled = lv_obj_has_state(data->form_active_sw, LV_STATE_CHECKED);
+
+  save_settings(data);
+
+  if (acc->enabled) {
+    baresip_manager_add_account(acc);
+  }
+
+  show_settings_screen(data);
+  update_account_dropdowns(data);
+  printf("[CallApplet] Account saved: %s@%s\n", acc->username, acc->server);
+}
+
+// Screen builders
+static void show_dialer_screen(call_data_t *data) {
+  lv_obj_clear_flag(data->dialer_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(data->settings_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(data->account_form_screen, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void refresh_account_list(call_data_t *data) {
+  if (!data->account_list)
+    return;
+
+  lv_obj_clean(data->account_list);
+
+  for (int i = 0; i < data->account_count; i++) {
+    voip_account_t *acc = &data->accounts[i];
+
+    lv_obj_t *item = lv_obj_create(data->account_list);
+    lv_obj_set_width(item, lv_pct(100));
+    lv_obj_set_height(item, 50);
+    lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START);
+
+    // Status icon for this account (FIRST, before name)
+    lv_obj_t *status_icon = lv_obj_create(item);
+    lv_obj_set_size(status_icon, 12, 12);
+    lv_obj_set_style_radius(status_icon, 6, 0);
+    lv_obj_set_style_border_width(status_icon, 0, 0);
+
+    // Set color based on registration status
+    lv_color_t status_color;
+    switch (data->account_status[i]) {
+    case REG_STATUS_REGISTERED:
+      status_color = lv_color_hex(0x00AA00); // Green
+      break;
+    case REG_STATUS_FAILED:
+      status_color = lv_color_hex(0xFF0000); // Red
+      break;
+    case REG_STATUS_REGISTERING:
+      status_color = lv_color_hex(0x808080); // Gray
+      break;
+    default:
+      status_color = lv_color_hex(0x404040); // Dark gray
+      break;
+    }
+    lv_obj_set_style_bg_color(status_icon, status_color, 0);
+
+    // Account name label (AFTER status icon)
+    lv_obj_t *label = lv_label_create(item);
+    lv_label_set_text(label, acc->display_name);
+    lv_obj_set_flex_grow(label, 1);
+
+    // Edit button
+    lv_obj_t *edit_btn = lv_btn_create(item);
+    lv_obj_set_size(edit_btn, 60, 35);
+    lv_obj_t *edit_label = lv_label_create(edit_btn);
+    lv_label_set_text(edit_label, "Edit");
+    lv_obj_center(edit_label);
+    lv_obj_set_user_data(edit_btn, (void *)(intptr_t)i);
+    lv_obj_add_event_cb(edit_btn, edit_account_clicked, LV_EVENT_CLICKED, NULL);
+
+    // Delete button
+    lv_obj_t *del_btn = lv_btn_create(item);
+    lv_obj_set_size(del_btn, 60, 40);
+    lv_obj_set_style_bg_color(del_btn, lv_color_hex(0xFF0000), 0);
+    lv_obj_t *del_label = lv_label_create(del_btn);
+    lv_label_set_text(del_label, LV_SYMBOL_TRASH);
+    lv_obj_center(del_label);
+    lv_obj_add_event_cb(del_btn, delete_account_clicked, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)i);
+                                                  lv_color_hex(0xFF0000), 0);
+                                                  lv_obj_t *del_label =
+                                                      lv_label_create(del_btn);
+                                                  lv_label_set_text(
+                                                      del_label,
+                                                      LV_SYMBOL_TRASH);
+                                                  lv_obj_center(del_label);
+                                                  lv_obj_add_event_cb(
+                                                      del_btn,
+                                                      delete_account_clicked,
+                                                      LV_EVENT_CLICKED,
+                                                      (void *)(intptr_t)i);
+  }
+}
+
+static void show_settings_screen(call_data_t *data) {
+  lv_obj_add_flag(data->dialer_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(data->settings_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(data->account_form_screen, LV_OBJ_FLAG_HIDDEN);
+
+  // Update codec dropdown
+  lv_dropdown_set_selected(data->codec_dropdown, data->preferred_codec);
+
+  // Refresh account list
+  refresh_account_list(data);
+}
+
+static void show_account_form(call_data_t *data, int account_index) {
+  lv_obj_add_flag(data->dialer_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(data->settings_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(data->account_form_screen, LV_OBJ_FLAG_HIDDEN);
+
+  data->editing_account_index = account_index;
+
+  if (account_index >= 0) {
+    // Editing existing account
+    voip_account_t *acc = &data->accounts[account_index];
+    lv_textarea_set_text(data->form_name_ta, acc->display_name);
+    lv_textarea_set_text(data->form_user_ta, acc->username);
+    lv_textarea_set_text(data->form_pass_ta, acc->password);
+    lv_textarea_set_text(data->form_server_ta, acc->server);
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", acc->port);
+    lv_textarea_set_text(data->form_port_ta, port_str);
+    lv_textarea_set_text(data->form_realm_ta, acc->realm);
+    if (acc->enabled)
+      lv_obj_add_state(data->form_active_sw, LV_STATE_CHECKED);
+    else
+      lv_obj_clear_state(data->form_active_sw, LV_STATE_CHECKED);
+  } else {
+    // New account
+    lv_textarea_set_text(data->form_name_ta, "");
+    lv_textarea_set_text(data->form_user_ta, "");
+    lv_textarea_set_text(data->form_pass_ta, "");
+    lv_textarea_set_text(data->form_server_ta, "");
+    lv_textarea_set_text(data->form_port_ta, "5060");
+    lv_textarea_set_text(data->form_realm_ta, "");
+    lv_obj_clear_state(data->form_active_sw, LV_STATE_CHECKED);
+  }
+}
+
+static int call_init(applet_t *applet) {
+  printf("[CallApplet] Initializing\n");
+
+  call_data_t *data = lv_mem_alloc(sizeof(call_data_t));
+  if (!data)
+    return -1;
+  memset(data, 0, sizeof(call_data_t));
+  applet->user_data = data;
+
+  // Initialize baresip manager (only done once, safe to call multiple times)
+  static int baresip_initialized = 0;
+  if (!baresip_initialized) {
+    printf("[CallApplet] Initializing baresip manager\n");
+    if (baresip_manager_init() != 0) {
+      printf("[CallApplet] Failed to initialize baresip manager\n");
+      lv_mem_free(data);
+      return -1;
+    }
+    baresip_initialized = 1;
+  }
+
+  // Set global pointer for callback
+  g_call_data = data;
+
+  // Register callback for registration status
+  baresip_manager_set_reg_callback(reg_status_callback);
+
+  // Load settings (includes auto-registration)
+  load_settings(data);
+
+  // Create all screens (hidden by default except dialer)
+  data->dialer_screen = lv_obj_create(applet->screen);
+  data->settings_screen = lv_obj_create(applet->screen);
+  data->account_form_screen = lv_obj_create(applet->screen);
+
+  lv_obj_set_size(data->dialer_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_size(data->settings_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_size(data->account_form_screen, LV_PCT(100), LV_PCT(100));
+
+  lv_obj_add_flag(data->settings_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(data->account_form_screen, LV_OBJ_FLAG_HIDDEN);
+
+  // === DIALER SCREEN ===
+  lv_obj_t *dialer_header = lv_obj_create(data->dialer_screen);
+  lv_obj_set_size(dialer_header, LV_PCT(100), 60);
+  lv_obj_align(dialer_header, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_flex_flow(dialer_header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(dialer_header, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  // Status icon (left side)
+  data->dialer_status_icon = lv_obj_create(dialer_header);
+  lv_obj_set_size(data->dialer_status_icon, 20, 20);
+  lv_obj_set_style_radius(data->dialer_status_icon, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(data->dialer_status_icon, lv_color_hex(0x404040),
+                            0); // Dark gray default
+  lv_obj_set_style_border_width(data->dialer_status_icon, 0, 0);
+
+  lv_obj_t *title = lv_label_create(dialer_header);
+  lv_label_set_text(title, "Call");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+
+  lv_obj_t *settings_btn = lv_btn_create(dialer_header);
+  lv_obj_set_size(settings_btn, 50, 40);
+  lv_obj_t *settings_label = lv_label_create(settings_btn);
+  lv_label_set_text(settings_label, LV_SYMBOL_SETTINGS);
+  lv_obj_center(settings_label);
+  lv_obj_add_event_cb(settings_btn, settings_btn_clicked, LV_EVENT_CLICKED,
+                      NULL);
+
+  lv_obj_t *dialer_content = lv_obj_create(data->dialer_screen);
+  lv_obj_set_size(dialer_content, LV_PCT(95), LV_PCT(80));
+  lv_obj_align(dialer_content, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+  // Account selector in Dialer
+  data->dialer_account_dropdown = lv_dropdown_create(dialer_content);
+  lv_obj_set_width(data->dialer_account_dropdown, LV_PCT(60));
+  lv_obj_align(data->dialer_account_dropdown, LV_ALIGN_TOP_MID, 0, 0);
+
+  data->number_label = lv_label_create(dialer_content);
+  lv_label_set_text(data->number_label, "Enter number");
+  lv_obj_set_style_text_font(data->number_label, &lv_font_montserrat_24, 0);
+  lv_obj_align(data->number_label, LV_ALIGN_TOP_MID, 0, 45);
+
+  lv_obj_t *numpad = lv_obj_create(dialer_content);
+  lv_obj_set_size(numpad, LV_PCT(90), 200);
+  lv_obj_align(numpad, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_flex_flow(numpad, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_flex_align(numpad, LV_FLEX_ALIGN_SPACE_EVENLY,
+                        LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER);
+
+  const char *digits[] = {"1", "2", "3", "4", "5", "6",
+                          "7", "8", "9", "*", "0", "#"};
+  for (int i = 0; i < 12; i++) {
+    lv_obj_t *btn = lv_btn_create(numpad);
+    lv_obj_set_size(btn, 60, 50);
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, digits[i]);
+    lv_obj_center(label);
+    lv_obj_add_event_cb(btn, number_btn_clicked, LV_EVENT_CLICKED,
+                        (void *)digits[i]);
+  }
+
+  lv_obj_t *btn_row = lv_obj_create(dialer_content);
+  lv_obj_set_size(btn_row, LV_PCT(90), 50);
+  lv_obj_align(btn_row, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_EVENLY,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *backspace_btn = lv_btn_create(btn_row);
+  lv_obj_set_size(backspace_btn, 80, 45);
+  lv_obj_t *bs_label = lv_label_create(backspace_btn);
+  lv_label_set_text(bs_label, LV_SYMBOL_BACKSPACE);
+  lv_obj_center(bs_label);
+  lv_obj_add_event_cb(backspace_btn, backspace_btn_clicked, LV_EVENT_CLICKED,
+                      NULL);
+
+  lv_obj_t *call_btn = lv_btn_create(btn_row);
+  lv_obj_set_size(call_btn, 120, 45);
+  lv_obj_set_style_bg_color(call_btn, lv_color_hex(0x00AA00), 0);
+  lv_obj_t *call_label = lv_label_create(call_btn);
+  lv_label_set_text(call_label, LV_SYMBOL_CALL " Call");
+  lv_obj_center(call_label);
+  lv_obj_add_event_cb(call_btn, call_btn_clicked, LV_EVENT_CLICKED, NULL);
+
+  // === SETTINGS SCREEN ===
+  lv_obj_t *settings_header = lv_obj_create(data->settings_screen);
+  lv_obj_set_size(settings_header, LV_PCT(100), 60);
+  lv_obj_align(settings_header, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_flex_flow(settings_header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(settings_header, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *settings_back_btn = lv_btn_create(settings_header);
+  lv_obj_set_size(settings_back_btn, 50, 40);
+  lv_obj_t *settings_back_label = lv_label_create(settings_back_btn);
+  lv_label_set_text(settings_back_label, LV_SYMBOL_LEFT);
+  lv_obj_center(settings_back_label);
+  lv_obj_add_event_cb(settings_back_btn, back_to_dialer, LV_EVENT_CLICKED,
+                      NULL);
+
+  lv_obj_t *settings_title = lv_label_create(settings_header);
+  lv_label_set_text(settings_title, "Call Settings");
+  lv_obj_set_style_text_font(settings_title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_pad_left(settings_title, 20, 0);
+
+  lv_obj_t *settings_add_btn = lv_btn_create(settings_header);
+  lv_obj_set_size(settings_add_btn, 80, 40);
+  lv_obj_set_style_bg_color(settings_add_btn, lv_color_hex(0x00AA00), 0);
+  lv_obj_t *add_label = lv_label_create(settings_add_btn);
+  lv_label_set_text(add_label, LV_SYMBOL_PLUS " Add");
+  lv_obj_center(add_label);
+  lv_obj_add_event_cb(settings_add_btn, add_account_btn_clicked,
+                      LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *settings_content = lv_obj_create(data->settings_screen);
+  lv_obj_set_size(settings_content, LV_PCT(95), LV_PCT(80));
+  lv_obj_align(settings_content, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_flex_flow(settings_content, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(settings_content, LV_DIR_VER);
+
+  // Codec section
+  lv_obj_t *codec_label = lv_label_create(settings_content);
+  lv_label_set_text(codec_label, "Preferred Audio Codec:");
+  lv_obj_set_style_text_font(codec_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_pad_top(codec_label, 10, 0);
+
+  data->codec_dropdown = lv_dropdown_create(settings_content);
+  lv_dropdown_set_options(data->codec_dropdown,
+                          "G.711 PCMU\nG.711 PCMA\nOpus\nG.722\nGSM");
+  lv_obj_set_width(data->codec_dropdown, LV_PCT(90));
+  lv_obj_add_event_cb(data->codec_dropdown, codec_changed,
+                      LV_EVENT_VALUE_CHANGED, NULL);
+
+  // Accounts section
+  lv_obj_t *accounts_section = lv_obj_create(settings_content);
+  lv_obj_set_size(accounts_section, LV_PCT(95), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(accounts_section, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(accounts_section, 0, 0);
+  lv_obj_set_style_border_width(accounts_section, 0, 0);
+
+  lv_obj_t *def_acc_label = lv_label_create(accounts_section);
+  lv_label_set_text(def_acc_label, "Default Account:");
+  lv_obj_set_style_text_font(def_acc_label, &lv_font_montserrat_14, 0);
+
+  data->default_account_dropdown = lv_dropdown_create(accounts_section);
+  lv_obj_set_width(data->default_account_dropdown, LV_PCT(90));
+  lv_obj_add_event_cb(data->default_account_dropdown, default_account_changed,
+                      LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_t *accounts_label = lv_label_create(settings_content);
+  lv_label_set_text(accounts_label, "VoIP Accounts:");
+  lv_obj_set_style_text_font(accounts_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_pad_top(accounts_label, 20, 0);
+
+  data->account_list = lv_obj_create(settings_content);
+  lv_obj_set_size(data->account_list, LV_PCT(95), 200);
+  lv_obj_set_flex_flow(data->account_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(data->account_list, LV_DIR_VER);
+
+  // === ACCOUNT FORM SCREEN ===
+  lv_obj_t *form_header = lv_obj_create(data->account_form_screen);
+  lv_obj_set_size(form_header, LV_PCT(100), 60);
+  lv_obj_align(form_header, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_flex_flow(form_header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(form_header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *form_back_btn = lv_btn_create(form_header);
+  lv_obj_set_size(form_back_btn, 50, 40);
+  lv_obj_t *form_back_label = lv_label_create(form_back_btn);
+  lv_label_set_text(form_back_label, LV_SYMBOL_LEFT);
+  lv_obj_center(form_back_label);
+  lv_obj_add_event_cb(form_back_btn, back_to_settings, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *form_title = lv_label_create(form_header);
+  lv_label_set_text(form_title, "Account");
+  lv_obj_set_style_text_font(form_title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_pad_left(form_title, 20, 0);
+
+  lv_obj_t *form_content = lv_obj_create(data->account_form_screen);
+  lv_obj_set_size(form_content, LV_PCT(95), LV_PCT(80));
+  lv_obj_align(form_content, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_flex_flow(form_content, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(form_content, LV_DIR_VER);
+
+  // Form fields
+  lv_obj_t *name_label = lv_label_create(form_content);
+  lv_label_set_text(name_label, "Display Name:");
+  data->form_name_ta = lv_textarea_create(form_content);
+  lv_obj_set_width(data->form_name_ta, LV_PCT(90));
+  lv_textarea_set_one_line(data->form_name_ta, true);
+  lv_textarea_set_placeholder_text(data->form_name_ta, "My Account");
+
+  lv_obj_t *user_label = lv_label_create(form_content);
+  lv_label_set_text(user_label, "Username:");
+  data->form_user_ta = lv_textarea_create(form_content);
+  lv_obj_set_width(data->form_user_ta, LV_PCT(90));
+  lv_textarea_set_one_line(data->form_user_ta, true);
+  lv_textarea_set_placeholder_text(data->form_user_ta, "user123");
+
+  lv_obj_t *pass_label = lv_label_create(form_content);
+  lv_label_set_text(pass_label, "Password:");
+  data->form_pass_ta = lv_textarea_create(form_content);
+  lv_obj_set_width(data->form_pass_ta, LV_PCT(90));
+  lv_textarea_set_one_line(data->form_pass_ta, true);
+  lv_textarea_set_password_mode(data->form_pass_ta, true);
+  lv_textarea_set_placeholder_text(data->form_pass_ta, "password");
+
+  lv_obj_t *server_label = lv_label_create(form_content);
+  lv_label_set_text(server_label, "SIP Server:");
+  data->form_server_ta = lv_textarea_create(form_content);
+  lv_obj_set_width(data->form_server_ta, LV_PCT(90));
+  lv_textarea_set_one_line(data->form_server_ta, true);
+  lv_textarea_set_placeholder_text(data->form_server_ta, "sip.example.com");
+
+  lv_obj_t *port_label = lv_label_create(form_content);
+  lv_label_set_text(port_label, "Port:");
+  data->form_port_ta = lv_textarea_create(form_content);
+  lv_obj_set_width(data->form_port_ta, LV_PCT(90));
+  lv_textarea_set_one_line(data->form_port_ta, true);
+  lv_textarea_set_placeholder_text(data->form_port_ta, "5060");
+  lv_textarea_set_placeholder_text(data->form_port_ta, "5060");
+  lv_textarea_set_accepted_chars(data->form_port_ta, "0123456789");
+
+  lv_obj_t *realm_label = lv_label_create(form_content);
+  lv_label_set_text(realm_label, "Realm (Optional):");
+  data->form_realm_ta = lv_textarea_create(form_content);
+  lv_obj_set_width(data->form_realm_ta, LV_PCT(90));
+  lv_textarea_set_one_line(data->form_realm_ta, true);
+
+  lv_obj_t *active_cont = lv_obj_create(form_content);
+  lv_obj_set_size(active_cont, LV_PCT(90), 50);
+  lv_obj_set_flex_flow(active_cont, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(active_cont, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_all(active_cont, 0, 0);
+  lv_obj_set_style_border_width(active_cont, 0, 0);
+
+  lv_obj_t *active_label = lv_label_create(active_cont);
+  lv_label_set_text(active_label, "Active (Register):");
+
+  data->form_active_sw = lv_switch_create(active_cont);
+
+  // Save button
+  lv_obj_t *save_btn = lv_btn_create(form_content);
+  lv_obj_set_size(save_btn, LV_PCT(90), 45);
+  lv_obj_set_style_bg_color(save_btn, lv_color_hex(0x00AA00), 0);
+  lv_obj_t *save_label = lv_label_create(save_btn);
+  lv_label_set_text(save_label, LV_SYMBOL_SAVE " Save Account");
+  lv_obj_center(save_label);
+  lv_obj_add_event_cb(save_btn, save_account_clicked, LV_EVENT_CLICKED, NULL);
+
+  strcpy(data->number_buffer, "");
+
+  // Initialize dropdowns
+  update_account_dropdowns(data);
+
+  return 0;
+}
+
+static void call_start(applet_t *applet) {
+  (void)applet;
+  printf("[CallApplet] Started\n");
+}
+
+static void call_pause(applet_t *applet) {
+  (void)applet;
+  printf("[CallApplet] Paused\n");
+}
+
+static void call_resume(applet_t *applet) {
+  (void)applet;
+  printf("[CallApplet] Resumed\n");
+}
+
+static void call_stop(applet_t *applet) {
+  (void)applet;
+  printf("[CallApplet] Stopped\n");
+}
+
+static void call_destroy(applet_t *applet) {
+  printf("[CallApplet] Destroying\n");
+  if (applet->user_data) {
+    lv_mem_free(applet->user_data);
+    applet->user_data = NULL;
+  }
+}
+
+APPLET_DEFINE(call_applet, "Call", "Make a call", LV_SYMBOL_CALL);
+
+void call_applet_register(void) {
+  call_applet.callbacks.init = call_init;
+  call_applet.callbacks.start = call_start;
+  call_applet.callbacks.pause = call_pause;
+  call_applet.callbacks.resume = call_resume;
+  call_applet.callbacks.stop = call_stop;
+  call_applet.callbacks.destroy = call_destroy;
+
+  applet_manager_register(&call_applet);
+}
