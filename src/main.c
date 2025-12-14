@@ -154,10 +154,23 @@ int main(void) {
       if (applets[i] && applets[i]->name &&
           strcmp(applets[i]->name, "Call") == 0) {
         if (applets[i]->callbacks.init) {
+          // Manually create screen to satisfy applet_manager requirements
+          if (!applets[i]->screen) {
+            applets[i]->screen = lv_obj_create(NULL);
+          }
+
           if (applets[i]->callbacks.init(applets[i]) != 0) {
             log_error("Main",
                       "Failed to initialize Call applet background services");
+            // Cleanup on failure
+            if (applets[i]->screen) {
+              lv_obj_del(applets[i]->screen);
+              applets[i]->screen = NULL;
+            }
           } else {
+            // Mark as PAUSED so applet_manager knows it's initialized but
+            // background
+            applets[i]->state = APPLET_STATE_PAUSED;
             log_info("Main", "Call applet background services initialized");
           }
         }

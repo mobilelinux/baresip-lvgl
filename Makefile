@@ -26,12 +26,13 @@ LDFLAGS = -L/opt/homebrew/lib -lm $(shell sdl2-config --libs) \
 
 # Source files
 SRCS = $(SRC_DIR)/main.c \
-       $(SRC_DIR)/applet_manager.c \
-       $(SRC_DIR)/config_manager.c \
-       $(SRC_DIR)/baresip_manager.c \
-       $(SRC_DIR)/contact_manager.c \
-       $(SRC_DIR)/history_manager.c \
-       $(SRC_DIR)/database_manager.c \
+       $(SRC_DIR)/logger/logger.c \
+       $(SRC_DIR)/manager/applet_manager.c \
+       $(SRC_DIR)/manager/config_manager.c \
+       $(SRC_DIR)/manager/baresip_manager.c \
+       $(SRC_DIR)/manager/contact_manager.c \
+       $(SRC_DIR)/manager/history_manager.c \
+       $(SRC_DIR)/manager/database_manager.c \
        $(APPLET_DIR)/home_applet.c \
        $(APPLET_DIR)/settings_applet.c \
        $(APPLET_DIR)/calculator_applet.c \

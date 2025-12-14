@@ -31,6 +31,14 @@ typedef struct {
   reg_status_t status;
 } account_status_t;
 
+#define MAX_CALLS 4
+
+typedef struct {
+  struct call *call;
+  char peer_uri[256];
+  enum call_state state;
+} active_call_t;
+
 // Global state
 static struct {
   enum call_state state;
@@ -39,6 +47,7 @@ static struct {
   call_event_cb callback;
   reg_event_cb reg_callback;
   struct call *current_call;
+  active_call_t active_calls[MAX_CALLS];
   account_status_t accounts[MAX_ACCOUNTS];
   int account_count;
 } g_call_state = {.state = CALL_STATE_IDLE,
@@ -48,6 +57,50 @@ static struct {
                   .reg_callback = NULL,
                   .current_call = NULL,
                   .account_count = 0};
+
+static void add_or_update_call(struct call *call, enum call_state state,
+                               const char *peer) {
+  if (!call)
+    return;
+  // Find existing
+  for (int i = 0; i < MAX_CALLS; i++) {
+    if (g_call_state.active_calls[i].call == call) {
+      g_call_state.active_calls[i].state = state;
+      if (peer)
+        strncpy(g_call_state.active_calls[i].peer_uri, peer, 255);
+      return;
+    }
+  }
+  // Add new
+  for (int i = 0; i < MAX_CALLS; i++) {
+    if (g_call_state.active_calls[i].call == NULL) {
+      g_call_state.active_calls[i].call = call;
+      g_call_state.active_calls[i].state = state;
+      if (peer)
+        strncpy(g_call_state.active_calls[i].peer_uri, peer, 255);
+      else
+        g_call_state.active_calls[i].peer_uri[0] = '\0';
+      log_info("BaresipManager", "Added call %p to slot %d", call, i);
+      return;
+    }
+  }
+  log_warn("BaresipManager", "Max calls reached, could not track call %p",
+           call);
+}
+
+static void remove_call(struct call *call) {
+  if (!call)
+    return;
+  for (int i = 0; i < MAX_CALLS; i++) {
+    if (g_call_state.active_calls[i].call == call) {
+      log_info("BaresipManager", "Removed call %p from slot %d", call, i);
+      g_call_state.active_calls[i].call = NULL;
+      g_call_state.active_calls[i].state = CALL_STATE_IDLE;
+      g_call_state.active_calls[i].peer_uri[0] = '\0';
+      return;
+    }
+  }
+}
 
 // Signal handler for call events
 static void signal_handler(int sig) {
@@ -179,6 +232,7 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     if (call) {
       g_call_state.current_call = call;
       strncpy(g_call_state.peer_uri, peer, sizeof(g_call_state.peer_uri) - 1);
+      add_or_update_call(call, CALL_STATE_INCOMING, peer);
     } else {
       if (!g_call_state.current_call) {
         log_warn("BaresipManager", "WARNING: INCOMING event with no call "
@@ -189,7 +243,7 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     log_debug("BaresipManager", "Calling callback: %p with state INCOMING",
               (void *)g_call_state.callback);
     if (g_call_state.callback) {
-      g_call_state.callback(CALL_STATE_INCOMING, peer);
+      g_call_state.callback(CALL_STATE_INCOMING, peer, (void *)call);
     } else {
       log_error("BaresipManager",
                 "ERROR: Callback is NULL! UI will not update.");
@@ -198,9 +252,21 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
 
   case BEVENT_CALL_RINGING:
     log_info("BaresipManager", ">>> CALL RINGING");
-    g_call_state.state = CALL_STATE_OUTGOING;
+    g_call_state.state = CALL_STATE_RINGING; // was OUTGOING, better RINGING
+    if (call)
+      add_or_update_call(call, CALL_STATE_RINGING, peer);
     if (g_call_state.callback) {
-      g_call_state.callback(CALL_STATE_OUTGOING, peer);
+      g_call_state.callback(CALL_STATE_RINGING, peer, (void *)call);
+    }
+    break;
+
+  case BEVENT_CALL_PROGRESS:
+    log_info("BaresipManager", ">>> CALL PROGRESS (Early Media/183)");
+    g_call_state.state = CALL_STATE_EARLY;
+    if (call)
+      add_or_update_call(call, CALL_STATE_EARLY, peer);
+    if (g_call_state.callback) {
+      g_call_state.callback(CALL_STATE_EARLY, peer, (void *)call);
     }
     break;
 
@@ -208,8 +274,10 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     log_info("BaresipManager", ">>> CALL ESTABLISHED");
     g_call_state.state = CALL_STATE_ESTABLISHED;
     g_call_state.current_call = call;
+    if (call)
+      add_or_update_call(call, CALL_STATE_ESTABLISHED, peer);
     if (g_call_state.callback) {
-      g_call_state.callback(CALL_STATE_ESTABLISHED, peer);
+      g_call_state.callback(CALL_STATE_ESTABLISHED, peer, (void *)call);
     }
     break;
 
@@ -231,14 +299,56 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
 
     history_add(NULL, peer, type);
 
-    g_call_state.state = CALL_STATE_TERMINATED;
-    g_call_state.current_call = NULL;
-    if (g_call_state.callback) {
-      g_call_state.callback(CALL_STATE_TERMINATED, peer);
+    // Remove from active list
+    if (call)
+      remove_call(call);
+
+    // If the closed call was the current one, try to switch to another
+    if (g_call_state.current_call == call) {
+      g_call_state.current_call = NULL;
+      // Search for another active call
+      int others = 0;
+      for (int i = 0; i < MAX_CALLS; i++) {
+        if (g_call_state.active_calls[i].call) {
+          g_call_state.current_call = g_call_state.active_calls[i].call;
+          g_call_state.state = g_call_state.active_calls[i].state;
+          strncpy(g_call_state.peer_uri, g_call_state.active_calls[i].peer_uri,
+                  255);
+          others++;
+          break;
+        }
+      }
+      if (others == 0) {
+        g_call_state.state = CALL_STATE_TERMINATED;
+        g_call_state.peer_uri[0] = '\0';
+      }
+    } else if (g_call_state.current_call == NULL) {
+      g_call_state.state = CALL_STATE_TERMINATED;
     }
-    // Reset to idle after a moment
-    g_call_state.state = CALL_STATE_IDLE;
-    g_call_state.peer_uri[0] = '\0';
+
+    if (g_call_state.state == CALL_STATE_TERMINATED && g_call_state.callback) {
+      g_call_state.callback(CALL_STATE_TERMINATED, peer, (void *)call);
+    } else if (g_call_state.callback) {
+      // Notify applet to refresh list because a background call ended
+      // Reuse CALL_STATE_ESTABLISHED to trigger refresh?
+      // Or just let the applet poll? The applet uses `on_call_state_change`.
+      // We should signal that the stack state changed.
+      // Ideally we need a separate event, but re-sending ESTABLISHED with
+      // current peer might work.
+      if (g_call_state.current_call)
+        g_call_state.callback(g_call_state.state, g_call_state.peer_uri,
+                              (void *)g_call_state.current_call);
+    }
+
+    // Reset to idle if really no calls
+    bool any_calls = false;
+    for (int i = 0; i < MAX_CALLS; i++)
+      if (g_call_state.active_calls[i].call)
+        any_calls = true;
+    if (!any_calls) {
+      g_call_state.state = CALL_STATE_IDLE;
+      g_call_state.peer_uri[0] = '\0';
+    }
     break;
   }
 
@@ -311,7 +421,7 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
       if (call)
         strncpy(g_call_state.peer_uri, peer, sizeof(g_call_state.peer_uri) - 1);
       if (g_call_state.callback)
-        g_call_state.callback(CALL_STATE_INCOMING, peer);
+        g_call_state.callback(CALL_STATE_INCOMING, peer, (void *)call);
     }
     break;
 
@@ -510,12 +620,19 @@ int baresip_manager_init(void) {
   snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "audiounit");
   snprintf(cfg->audio.alert_mod, sizeof(cfg->audio.alert_mod), "audiounit");
 
-  // Audio Quality Tuning (Fix for "unsmoothy" audio)
+  // Audio Device Tuning (Fix for "unsmoothy" audio)
   cfg->audio.adaptive = true;
-  cfg->audio.buffer.min = 100; // Minimum buffer 100ms
-  cfg->audio.buffer.max = 300; // Maximum buffer 300ms (allows for jitter)
-  log_info("BaresipManager", "Audio tuning applied: adaptive=yes, "
-                             "buffer=100-300ms");
+  cfg->audio.buffer.min = 100; // Minimum device buffer 100ms
+  cfg->audio.buffer.max = 300; // Maximum device buffer 300ms
+
+  // Network Jitter Buffer Tuning (Fix for jbuf drops)
+  cfg->avt.audio.jbtype = JBUF_ADAPTIVE;
+  cfg->avt.audio.jbuf_del.min = 100; // Min network delay 100ms
+  cfg->avt.audio.jbuf_del.max = 500; // Max network delay 500ms
+
+  log_info(
+      "BaresipManager",
+      "Audio tuning applied: Device=[100-300ms], Network(AVT)=[100-500ms]");
 #endif
 
   // Initialize Baresip core
@@ -561,6 +678,8 @@ int baresip_manager_init(void) {
     exports_stun.init();
   if (exports_turn.init)
     exports_turn.init();
+
+  // WebRTC AEC not available (verified via nm), strictly using AudioUnit
 
 #ifdef __APPLE__
   if (exports_audiounit.init)
@@ -649,6 +768,13 @@ int baresip_manager_call(const char *uri) {
   full_uri[sizeof(full_uri) - 1] = '\0';
 
   // Make call
+  if (g_call_state.current_call && !call_is_onhold(g_call_state.current_call)) {
+    log_info("BaresipManager",
+             "Holding active call %p before new outgoing call",
+             g_call_state.current_call);
+    call_hold(g_call_state.current_call, true);
+  }
+
   log_info("BaresipManager", "Calling normalized uri: '%s' using ua: %p",
            full_uri, (void *)ua);
 
@@ -662,6 +788,7 @@ int baresip_manager_call(const char *uri) {
 
   if (call) {
     g_call_state.current_call = call;
+    add_or_update_call(call, CALL_STATE_OUTGOING, full_uri);
     log_debug("BaresipManager", "Stored outgoing call object: %p",
               (void *)call);
   } else {
@@ -708,6 +835,16 @@ int baresip_manager_answer(void) {
   log_info("BaresipManager", "Answering call %p",
            (void *)g_call_state.current_call);
 
+  // Hold other calls first
+  for (int i = 0; i < MAX_CALLS; i++) {
+    struct call *c = g_call_state.active_calls[i].call;
+    if (c && c != g_call_state.current_call && !call_is_onhold(c)) {
+      log_info("BaresipManager", "Holding existing call %p before answering",
+               c);
+      call_hold(c, true);
+    }
+  }
+
   int err = call_answer(g_call_state.current_call, 200, VIDMODE_OFF);
   if (err) {
     log_error("BaresipManager", "Failed to answer call: %d", err);
@@ -719,7 +856,8 @@ int baresip_manager_answer(void) {
   // Manually force state update just in case event is slow
   g_call_state.state = CALL_STATE_ESTABLISHED;
   if (g_call_state.callback) {
-    g_call_state.callback(CALL_STATE_ESTABLISHED, g_call_state.peer_uri);
+    g_call_state.callback(CALL_STATE_ESTABLISHED, g_call_state.peer_uri,
+                          (void *)g_call_state.current_call);
   }
 
   return 0;
@@ -802,10 +940,13 @@ int baresip_manager_add_account(const voip_account_t *acc) {
    */
   /* Simplified for now: <sip:user:password@domain>;transport=udp */
 
+  char transport_param[32] = ";transport=udp";
+
+  // Handle Custom Port
   char extra_params[512] = {0};
 
   // Process Audio Codecs
-  if (str_isset(acc->audio_codecs)) {
+  if (strlen(acc->audio_codecs) > 0) {
     char buf[256] = {0};
     char *dup = strdup(acc->audio_codecs);
     char *tok = strtok(dup, ",");
@@ -829,7 +970,7 @@ int baresip_manager_add_account(const voip_account_t *acc) {
   }
 
   // Process Video Codecs
-  if (str_isset(acc->video_codecs)) {
+  if (strlen(acc->video_codecs) > 0) {
     char buf[256] = {0};
     char *dup = strdup(acc->video_codecs);
     char *tok = strtok(dup, ",");
@@ -852,9 +993,20 @@ int baresip_manager_add_account(const voip_account_t *acc) {
     }
   }
 
-  if (str_isset(acc->outbound_proxy)) {
+  // Handle Custom Port
+  char server_with_port[150];
+  if (acc->port > 0 && acc->port != 5060) {
+    snprintf(server_with_port, sizeof(server_with_port), "%s:%d", acc->server,
+             acc->port);
+  } else {
+    snprintf(server_with_port, sizeof(server_with_port), "%s", acc->server);
+  }
+
+  if (strlen(acc->outbound_proxy) > 0) {
+    // With Outbound Proxy
     // Format:
     // <sip:user@domain;transport=udp>;auth_pass=pass;auth_user=user;outbound=sip:proxy;regint=600
+
     char proxy_buf[256];
     if (strstr(acc->outbound_proxy, "sip:") == acc->outbound_proxy) {
       snprintf(proxy_buf, sizeof(proxy_buf), "%s", acc->outbound_proxy);
@@ -862,16 +1014,24 @@ int baresip_manager_add_account(const voip_account_t *acc) {
       snprintf(proxy_buf, sizeof(proxy_buf), "sip:%s", acc->outbound_proxy);
     }
 
+    const char *a_user =
+        (strlen(acc->auth_user) > 0) ? acc->auth_user : acc->username;
+
     snprintf(aor, sizeof(aor),
-             "<sip:%s@%s;transport=udp>;auth_pass=%s;auth_user=%s;outbound=%s;"
-             "regint=600%s",
-             acc->username, acc->server, acc->password, acc->username,
-             proxy_buf, extra_params);
+             "<sip:%s@%s%s>;auth_pass=%s;auth_user=%s;outbound=%s;regint=600%s",
+             acc->username, server_with_port, transport_param, acc->password,
+             a_user, proxy_buf, extra_params);
   } else {
-    snprintf(aor, sizeof(aor),
-             "<sip:%s@%s;transport=udp>;auth_pass=%s;auth_user=%s;regint=600%s",
-             acc->username, acc->server, acc->password, acc->username,
-             extra_params);
+    // Direct Registration
+    snprintf(aor, sizeof(aor), "<sip:%s:%s@%s%s>;regint=3600%s", acc->username,
+             acc->password, server_with_port, transport_param, extra_params);
+  }
+
+  // Add display name if present
+  if (strlen(acc->display_name) > 0) {
+    char temp[1024];
+    snprintf(temp, sizeof(temp), "\"%s\" %s", acc->display_name, aor);
+    strcpy(aor, temp);
   }
 
   log_info("BaresipManager", "Adding account: %s", aor);
@@ -879,24 +1039,124 @@ int baresip_manager_add_account(const voip_account_t *acc) {
   struct ua *ua = NULL;
   err = ua_alloc(&ua, aor);
   if (err) {
-    log_error("BaresipManager", "Failed to add account: %d", err);
+    log_error("BaresipManager", "Failed to allocate UA: %d", err);
     return err;
   }
 
+  // Auto-register
   if (ua) {
-    log_debug("BaresipManager", "ua_alloc succeeded, UA created: %p",
-              (void *)ua);
-    log_info("BaresipManager", "Calling ua_register to start registration...");
-    err = ua_register(ua);
-    if (err) {
-      log_warn("BaresipManager", "ua_register failed: %d", err);
-    } else {
-      log_info("BaresipManager", "ua_register succeeded, registration started");
+    if (acc->enabled) {
+      err = ua_register(ua);
+      if (err) {
+        log_warn("BaresipManager", "Failed to register UA: %d", err);
+      }
+    }
+
+    // Update our internal tracking list
+    const char *final_aor = account_aor(ua_account(ua));
+    update_account_status(final_aor, REG_STATUS_NONE);
+  }
+
+  return 0;
+}
+
+int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
+  int count = 0;
+  for (int i = 0; i < MAX_CALLS && count < max_count; i++) {
+    struct call *c = g_call_state.active_calls[i].call;
+    if (c) {
+      // Self-healing: Check actual Baresip state
+      enum call_state real_state = call_state(c);
+
+      if (real_state == CALL_STATE_TERMINATED ||
+          g_call_state.active_calls[i].state == CALL_STATE_TERMINATED) {
+        log_warn(
+            "BaresipManager",
+            "Found zombie call %p (TERMINATED) in active list. Cleaning up...",
+            (void *)c);
+        // Force cleanup
+        g_call_state.active_calls[i].call = NULL;
+        g_call_state.active_calls[i].state = CALL_STATE_IDLE;
+        g_call_state.active_calls[i].peer_uri[0] = '\0';
+
+        // Also check if it was current
+        if (g_call_state.current_call == c) {
+          g_call_state.current_call = NULL;
+          g_call_state.state = CALL_STATE_IDLE;
+        }
+        continue;
+      }
+
+      // Update our cache with real state
+      g_call_state.active_calls[i].state = real_state;
+
+      calls[count].id = c;
+      strncpy(calls[count].peer_uri, g_call_state.active_calls[i].peer_uri,
+              sizeof(calls[count].peer_uri) - 1);
+      calls[count].state = g_call_state.active_calls[i].state;
+      calls[count].is_held = call_is_onhold(c);
+      calls[count].is_current = (c == g_call_state.current_call);
+      count++;
+    }
+  }
+  return count;
+}
+
+int baresip_manager_send_dtmf(char key) {
+  struct call *call = g_call_state.current_call;
+  if (!call)
+    return -1;
+  return call_send_digit(call, key);
+}
+
+int baresip_manager_hold_call(void *call_id) {
+  struct call *call = (struct call *)call_id;
+  if (!call)
+    return -1;
+  log_info("BaresipManager", "Holding call %p", call);
+  return call_hold(call, true);
+}
+
+int baresip_manager_resume_call(void *call_id) {
+  struct call *call = (struct call *)call_id;
+  if (!call)
+    return -1;
+  log_info("BaresipManager", "Resuming call %p", call);
+  return call_hold(call, false);
+}
+
+int baresip_manager_switch_to(void *call_id) {
+  struct call *target = (struct call *)call_id;
+  if (!target)
+    return -1;
+
+  // Hold current if exists and not target
+  if (g_call_state.current_call && g_call_state.current_call != target) {
+    baresip_manager_hold_call(g_call_state.current_call);
+  }
+
+  // Resume target
+  baresip_manager_resume_call(target);
+  g_call_state.current_call = target;
+
+  // find state
+  for (int i = 0; i < MAX_CALLS; i++) {
+    if (g_call_state.active_calls[i].call == target) {
+      g_call_state.state = g_call_state.active_calls[i].state;
+      strncpy(g_call_state.peer_uri, g_call_state.active_calls[i].peer_uri,
+              255);
+      break;
     }
   }
 
   return 0;
 }
+
+/* Format: "Display Name" <sip:user:password@domain;transport=udp>;regint=3600
+ */
+/* Simplified for now: <sip:user:password@domain>;transport=udp */
+
+// End of baresip_manager.c
 
 void baresip_manager_destroy(void) {
   ua_stop_all(false);

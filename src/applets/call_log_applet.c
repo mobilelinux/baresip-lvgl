@@ -17,11 +17,23 @@ static void call_back_clicked(lv_event_t *e) {
   const call_log_entry_t *entry =
       (const call_log_entry_t *)lv_event_get_user_data(e);
   if (entry) {
-    log_info("CallLogApplet", "Calling back %s at %s", entry->name,
-             entry->number);
-    if (baresip_manager_call(entry->number) == 0) {
-      // Switch to call applet if call initiated successfully
-      applet_manager_launch_applet(&call_applet);
+    // Make a local copy of data to ensure memory safety
+    char name_buf[64];
+    char number_buf[128];
+
+    // Use snprintf for safe copying with null termination
+    snprintf(name_buf, sizeof(name_buf), "%s", entry->name);
+    snprintf(number_buf, sizeof(number_buf), "%s", entry->number);
+
+    log_info("CallLogApplet", "Calling back %s at %s", name_buf, number_buf);
+
+    if (strlen(number_buf) > 0) {
+      if (baresip_manager_call(number_buf) == 0) {
+        // Switch to call applet if call initiated successfully
+        applet_manager_launch_applet(&call_applet);
+      }
+    } else {
+      log_warn("CallLogApplet", "Cannot call empty number");
     }
   }
 }

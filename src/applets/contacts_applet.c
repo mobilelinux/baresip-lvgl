@@ -122,9 +122,13 @@ static void contact_item_clicked(lv_event_t *e) {
 // ------------------- UI DRAWING -------------------
 
 static void draw_list(void) {
+  // Use Flex layout for full height filling
+  lv_obj_set_flex_flow(g_applet->screen, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(g_applet->screen, 0, 0);
+  lv_obj_set_style_pad_gap(g_applet->screen, 0, 0);
+
   lv_obj_t *header = lv_obj_create(g_applet->screen);
   lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
   lv_obj_set_style_bg_color(header, lv_palette_main(LV_PALETTE_LIGHT_BLUE), 0);
   lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -146,8 +150,8 @@ static void draw_list(void) {
   lv_obj_align(title, LV_ALIGN_LEFT_MID, 50, 0);
 
   lv_obj_t *list = lv_obj_create(g_applet->screen);
-  lv_obj_set_pos(list, 0, 60);
-  lv_obj_set_size(list, LV_PCT(100), lv_pct(100) - 60);
+  lv_obj_set_width(list, LV_PCT(100));
+  lv_obj_set_flex_grow(list, 1); // Fill remaining space
   lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(list, 10, 0);
 
@@ -190,6 +194,7 @@ static void draw_list(void) {
   }
 
   lv_obj_t *fab = lv_btn_create(g_applet->screen);
+  lv_obj_add_flag(fab, LV_OBJ_FLAG_FLOATING); // Ignore flex layout
   lv_obj_set_size(fab, 56, 56);
   lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
   lv_obj_set_style_radius(fab, LV_RADIUS_CIRCLE, 0);
@@ -206,9 +211,13 @@ static void draw_list(void) {
 }
 
 static void draw_editor(void) {
+  // Use Flex layout for full height filling
+  lv_obj_set_flex_flow(g_applet->screen, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(g_applet->screen, 0, 0);
+  lv_obj_set_style_pad_gap(g_applet->screen, 0, 0);
+
   lv_obj_t *header = lv_obj_create(g_applet->screen);
   lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
   lv_obj_set_style_bg_color(header, lv_palette_main(LV_PALETTE_LIGHT_BLUE), 0);
   lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -239,13 +248,18 @@ static void draw_editor(void) {
   lv_obj_center(save_icon);
 
   lv_obj_t *content = lv_obj_create(g_applet->screen);
-  lv_obj_set_pos(content, 0, 60);
-  lv_obj_set_size(content, LV_PCT(100), lv_pct(100) - 60);
+  lv_obj_set_width(content, LV_PCT(100));
+  lv_obj_set_flex_grow(content, 1); // Fill remaining space
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(content, 20, 0); // Add spacing between elements
   lv_obj_set_style_pad_all(content, 20, 0);
+
+  // Make content looks like full screen (no card style)
+  lv_obj_set_style_border_width(content, 0, 0);
+  lv_obj_set_style_radius(content, 0, 0);
+  lv_obj_set_style_bg_color(content, lv_color_white(), 0);
 
   lv_obj_t *avatar = create_avatar(
       content, is_new_contact ? "" : current_edit_contact.name, 80);
