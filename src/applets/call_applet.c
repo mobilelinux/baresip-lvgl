@@ -670,6 +670,11 @@ static void call_btn_clicked(lv_event_t *e) {
     log_info("CallApplet", "Calling: %s", data->number_buffer);
     baresip_manager_call(data->number_buffer);
     show_active_call_screen(data, data->number_buffer, false);
+
+    // Clear dialer number
+    data->number_buffer[0] = '\0';
+    if (data->number_label)
+      lv_label_set_text(data->number_label, "Enter number");
   }
 }
 
@@ -1678,7 +1683,7 @@ static void call_resume(applet_t *applet) {
 
   // Always refresh active call screen data if we are in a call
   // Check explicit intent first
-  if (data->request_active_view || data->current_state != CALL_STATE_IDLE) {
+  if (data->request_active_view) {
     if (data->request_active_view) {
       log_info("CallApplet", "Resuming with forced Active View");
     } else {

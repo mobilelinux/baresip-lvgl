@@ -1,6 +1,7 @@
 #include "applet.h"
 #include "applet_manager.h"
 #include "baresip_manager.h"
+#include "call_applet.h"
 #include "history_manager.h"
 #include "logger.h"
 #include <stdio.h>
@@ -28,8 +29,18 @@ static void call_back_clicked(lv_event_t *e) {
     log_info("CallLogApplet", "Calling back %s at %s", name_buf, number_buf);
 
     if (strlen(number_buf) > 0) {
-      if (baresip_manager_call(number_buf) == 0) {
+      int ret = -1;
+      if (strlen(entry->account_aor) > 0) {
+        log_info("CallLogApplet", "Calling back using stored account: %s",
+                 entry->account_aor);
+        ret = baresip_manager_call_with_account(number_buf, entry->account_aor);
+      } else {
+        ret = baresip_manager_call(number_buf);
+      }
+
+      if (ret == 0) {
         // Switch to call applet if call initiated successfully
+        call_applet_request_active_view();
         applet_manager_launch_applet(&call_applet);
       }
     } else {

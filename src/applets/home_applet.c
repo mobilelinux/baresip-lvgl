@@ -85,6 +85,7 @@ static void favorite_clicked(lv_event_t *e) {
   const char *number = (const char *)lv_event_get_user_data(e);
   if (number) {
     if (baresip_manager_call(number) == 0) {
+      call_applet_request_active_view();
       applet_manager_launch_applet(&call_applet);
     }
   }

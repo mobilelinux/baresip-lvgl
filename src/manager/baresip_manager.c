@@ -314,7 +314,15 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
       type = CALL_TYPE_OUTGOING;
     }
 
-    history_add(NULL, peer, type);
+    const char *acc_aor = "";
+    /*
+    if (call) {
+      struct ua *ua = call_ua(call);
+      if (ua)
+        acc_aor = ua_aor(ua);
+    }
+    */
+    history_add(NULL, peer, type, acc_aor);
 
     // Remove from active list
     if (call)
@@ -745,18 +753,30 @@ reg_status_t baresip_manager_get_account_status(const char *aor) {
   return acc ? acc->status : REG_STATUS_NONE;
 }
 
-int baresip_manager_call(const char *uri) {
-  struct ua *ua;
+int baresip_manager_call_with_account(const char *uri,
+                                      const char *account_aor) {
+  struct ua *ua = NULL;
   int err;
   char full_uri[256];
 
   if (!uri)
     return -1;
 
-  log_info("BaresipManager", "Making call to: %s", uri);
+  log_info("BaresipManager", "Making call to: %s (Account: %s)", uri,
+           account_aor ? account_aor : "Default");
 
-  // Get first user agent (default)
-  ua = uag_find_aor(NULL);
+  // Select User Agent
+  if (account_aor) {
+    ua = uag_find_aor(account_aor);
+    if (!ua) {
+      log_warn("BaresipManager",
+               "Account %s not found, falling back to default UA", account_aor);
+      ua = uag_find_aor(NULL);
+    }
+  } else {
+    ua = uag_find_aor(NULL);
+  }
+
   if (!ua) {
     log_warn("BaresipManager", "No user agent available");
     return -1;
@@ -818,6 +838,10 @@ int baresip_manager_call(const char *uri) {
   g_call_state.state = CALL_STATE_OUTGOING;
 
   return 0;
+}
+
+int baresip_manager_call(const char *uri) {
+  return baresip_manager_call_with_account(uri, NULL);
 }
 
 int baresip_manager_answer(void) {

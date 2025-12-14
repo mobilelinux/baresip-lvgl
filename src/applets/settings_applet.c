@@ -359,8 +359,13 @@ static void update_account_dropdowns(settings_data_t *data) {
     strcat(options, entry);
   }
 
+  // Add "None" option
+  if (data->account_count > 0)
+    strcat(options, "\n");
+  strcat(options, "None");
+
   if (strlen(options) == 0)
-    strcpy(options, "No Accounts");
+    strcpy(options, "None"); // Should at least have None
 
   if (data->default_account_dropdown)
     lv_dropdown_set_options(data->default_account_dropdown, options);
@@ -370,9 +375,17 @@ static void update_account_dropdowns(settings_data_t *data) {
     lv_dropdown_set_selected(data->codec_dropdown,
                              data->config.preferred_codec);
 
-  if (data->default_account_dropdown)
-    lv_dropdown_set_selected(data->default_account_dropdown,
-                             data->config.default_account_index);
+  if (data->default_account_dropdown) {
+    if (data->config.default_account_index >= 0 &&
+        data->config.default_account_index < data->account_count) {
+      lv_dropdown_set_selected(data->default_account_dropdown,
+                               data->config.default_account_index);
+    } else {
+      // Select "None" (last item)
+      lv_dropdown_set_selected(data->default_account_dropdown,
+                               data->account_count);
+    }
+  }
 }
 
 static void refresh_account_list(settings_data_t *data) {
@@ -911,6 +924,16 @@ static void save_call_settings(settings_data_t *data) {
       lv_dropdown_get_selected(data->call_contacts_dd);
   data->config.video_frame_size =
       lv_dropdown_get_selected(data->call_video_size_dd);
+
+  // Save Default Account
+  if (data->default_account_dropdown) {
+    int sel_idx = lv_dropdown_get_selected(data->default_account_dropdown);
+    if (sel_idx >= data->account_count) {
+      data->config.default_account_index = -1; // "None" selected
+    } else {
+      data->config.default_account_index = sel_idx;
+    }
+  }
 
   config_save_app_settings(&data->config);
 }

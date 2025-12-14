@@ -60,6 +60,11 @@ int db_init(void) {
     return -1;
   }
 
+  // Try to add account_aor column (ignore error if exists)
+  const char *sql_alter_log =
+      "ALTER TABLE call_log ADD COLUMN account_aor TEXT;";
+  sqlite3_exec(g_db, sql_alter_log, 0, 0, NULL);
+
   return 0;
 }
 

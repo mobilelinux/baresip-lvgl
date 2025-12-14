@@ -25,6 +25,7 @@ void baresip_manager_set_callback(call_event_cb cb);
 void baresip_manager_set_reg_callback(reg_event_cb cb);
 reg_status_t baresip_manager_get_account_status(const char *aor);
 int baresip_manager_call(const char *uri);
+int baresip_manager_call_with_account(const char *uri, const char *account_aor);
 int baresip_manager_answer(void);
 int baresip_manager_hangup(void);
 int baresip_manager_send_dtmf(char key);

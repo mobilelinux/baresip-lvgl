@@ -25,17 +25,19 @@ const call_log_entry_t *history_get_at(int index) {
   return &g_history[index];
 }
 
-int history_add(const char *name, const char *number, call_type_t type) {
+int history_add(const char *name, const char *number, call_type_t type,
+                const char *account_aor) {
   sqlite3 *db = db_get_handle();
   if (!db)
     return -1;
 
   long timestamp = (long)time(NULL);
 
-  char *sql =
-      sqlite3_mprintf("INSERT INTO call_log (name, number, type, timestamp) "
-                      "VALUES ('%q', '%q', %d, %ld);",
-                      name ? name : "", number ? number : "", type, timestamp);
+  char *sql = sqlite3_mprintf(
+      "INSERT INTO call_log (name, number, type, timestamp, account_aor) "
+      "VALUES ('%q', '%q', %d, %ld, '%q');",
+      name ? name : "", number ? number : "", type, timestamp,
+      account_aor ? account_aor : "");
 
   char *errmsg = NULL;
   int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
@@ -73,8 +75,10 @@ int history_load(void) {
 
   g_history_count = 0;
 
-  const char *sql = "SELECT name, number, type, timestamp FROM call_log ORDER "
-                    "BY timestamp DESC LIMIT 100;";
+  // Check columns? Or just select *? Safer to specify.
+  // Assuming account_aor added.
+  const char *sql = "SELECT name, number, type, timestamp, account_aor FROM "
+                    "call_log ORDER BY timestamp DESC LIMIT 100;";
   sqlite3_stmt *stmt;
 
   int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
@@ -90,11 +94,13 @@ int history_load(void) {
     const char *number = (const char *)sqlite3_column_text(stmt, 1);
     int type = sqlite3_column_int(stmt, 2);
     long timestamp = (long)sqlite3_column_int64(stmt, 3);
+    const char *acc_aor = (const char *)sqlite3_column_text(stmt, 4);
 
     strncpy(e->name, name ? name : "", sizeof(e->name) - 1);
     strncpy(e->number, number ? number : "", sizeof(e->number) - 1);
     e->type = (call_type_t)type;
     e->timestamp = timestamp;
+    strncpy(e->account_aor, acc_aor ? acc_aor : "", sizeof(e->account_aor) - 1);
 
     // Format time
     struct tm *tm_info = localtime(&e->timestamp);
