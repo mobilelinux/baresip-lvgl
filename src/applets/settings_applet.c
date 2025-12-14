@@ -406,14 +406,14 @@ static void refresh_account_list(settings_data_t *data) {
     else
       snprintf(buf, sizeof(buf), "%s", acc->username);
     lv_label_set_text(lbl, buf);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0); // Black text
 
     lv_obj_t *sub = lv_label_create(info);
     snprintf(buf, sizeof(buf), "sip:%s@%s", acc->username, acc->server);
     lv_label_set_text(sub, buf);
     lv_obj_set_style_text_color(sub, lv_color_hex(0x808080), 0); // Grey text
-    lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(sub, &lv_font_montserrat_16, 0);
 
     // Buttons
     lv_obj_t *btns = lv_obj_create(item);
@@ -468,7 +468,7 @@ static lv_obj_t *create_switch_row(lv_obj_t *parent, const char *label_text,
 
   lv_obj_t *lbl = lv_label_create(row);
   lv_label_set_text(lbl, label_text);
-  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
 
   lv_obj_t *sw = lv_switch_create(row);
   if (checked)
@@ -504,7 +504,7 @@ static lv_obj_t *create_dropdown_row(lv_obj_t *parent, const char *label_text,
 
   lv_obj_t *lbl = lv_label_create(row);
   lv_label_set_text(lbl, label_text);
-  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
 
   lv_obj_t *dd = lv_dropdown_create(row);
   lv_dropdown_set_options(dd, options);
@@ -597,7 +597,7 @@ static void show_codec_priority_screen(settings_data_t *data, bool is_audio) {
 
   lv_obj_t *title = lv_label_create(header);
   lv_label_set_text(title, is_audio ? "Audio Codecs" : "Video Codecs");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_14,
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_16,
                              0); // Reduced font size to fit
 
   lv_obj_t *dummy = lv_obj_create(header); // Spacer
@@ -852,7 +852,7 @@ static void show_call_settings(settings_data_t *data) {
   // Audio Settings Header
   lv_obj_t *audio_header = lv_label_create(content);
   lv_label_set_text(audio_header, "Audio Settings");
-  lv_obj_set_style_text_font(audio_header, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(audio_header, &lv_font_montserrat_16, 0);
   lv_obj_set_style_pad_top(audio_header, 20, 0);
   lv_obj_set_style_pad_bottom(audio_header, 10, 0);
 
@@ -948,7 +948,7 @@ static void show_account_form(settings_data_t *data) {
   // SIP URI Display
   lv_obj_t *uri_lbl = lv_label_create(content);
   lv_label_set_text(uri_lbl, "SIP URI");
-  lv_obj_set_style_text_font(uri_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(uri_lbl, &lv_font_montserrat_16, 0);
 
   lv_obj_t *uri_ta = lv_textarea_create(content);
   lv_obj_set_width(uri_ta, LV_PCT(95));

@@ -127,7 +127,7 @@ static void populate_favorites(home_data_t *data) {
   if (!found_any) {
     lv_obj_t *lbl = lv_label_create(data->favorites_dock);
     lv_label_set_text(lbl, "No Favorites");
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
     lv_obj_center(lbl);
   }
 }
@@ -197,7 +197,7 @@ static int home_init(applet_t *applet) {
 
   data->in_call_label = lv_label_create(data->in_call_btn);
   lv_label_set_text(data->in_call_label, LV_SYMBOL_CALL " In Call");
-  lv_obj_set_style_text_font(data->in_call_label, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(data->in_call_label, &lv_font_montserrat_16, 0);
   lv_obj_center(data->in_call_label);
 
   lv_obj_add_event_cb(data->in_call_btn, in_call_clicked, LV_EVENT_CLICKED,

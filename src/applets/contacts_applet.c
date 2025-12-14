@@ -174,7 +174,7 @@ static void draw_list(void) {
 
     lv_obj_t *name_lbl = lv_label_create(item);
     lv_label_set_text(name_lbl, c->name);
-    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, 0);
     lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 60, 0);
 
     lv_obj_t *edit_btn = lv_btn_create(item);
@@ -351,6 +351,7 @@ static void refresh_ui(void) {
 }
 
 static int contacts_init(applet_t *applet) {
+  log_info("ContactsApplet", "Initializing");
   g_applet = applet;
   is_editor_mode = false;
   refresh_ui();

@@ -161,7 +161,7 @@ static int call_log_init(applet_t *applet) {
     lv_label_set_text(number_label, number_display);
     lv_obj_set_style_text_color(number_label, lv_color_hex(0x808080),
                                 0); // Keep Grey as per requirements
-    lv_obj_set_style_text_font(number_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(number_label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_pad_right(number_label, 10,
                                0); // Spacing between number and time
 
@@ -170,7 +170,7 @@ static int call_log_init(applet_t *applet) {
     lv_label_set_text(time_label, entry->time);
     lv_obj_set_style_text_color(time_label, lv_color_black(),
                                 0); // Black for visibility
-    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_16, 0);
 
     // Call back button
     lv_obj_t *call_btn = lv_btn_create(log_item);

@@ -97,6 +97,23 @@ static void remove_call(struct call *call) {
       g_call_state.active_calls[i].call = NULL;
       g_call_state.active_calls[i].state = CALL_STATE_IDLE;
       g_call_state.active_calls[i].peer_uri[0] = '\0';
+
+      // If this was the current call, clear it and try to switch to another
+      if (g_call_state.current_call == call) {
+        g_call_state.current_call = NULL;
+        g_call_state.state = CALL_STATE_IDLE;
+
+        // Auto-switch to first available active call
+        for (int j = 0; j < MAX_CALLS; j++) {
+          if (g_call_state.active_calls[j].call) {
+            g_call_state.current_call = g_call_state.active_calls[j].call;
+            g_call_state.state = g_call_state.active_calls[j].state;
+            log_info("BaresipManager", "Auto-switched to call %p",
+                     g_call_state.current_call);
+            break;
+          }
+        }
+      }
       return;
     }
   }
@@ -864,6 +881,19 @@ int baresip_manager_answer(void) {
 }
 
 int baresip_manager_hangup(void) {
+  // Failsafe: If current_call is NULL, try to find one
+  if (!g_call_state.current_call) {
+    for (int i = 0; i < MAX_CALLS; i++) {
+      if (g_call_state.active_calls[i].call) {
+        g_call_state.current_call = g_call_state.active_calls[i].call;
+        g_call_state.state = g_call_state.active_calls[i].state;
+        log_info("BaresipManager", "Hangup: Auto-selected call %p",
+                 g_call_state.current_call);
+        break;
+      }
+    }
+  }
+
   if (!g_call_state.current_call) {
     log_warn("BaresipManager", "No active call to hangup");
     return -1;
@@ -872,8 +902,11 @@ int baresip_manager_hangup(void) {
   log_info("BaresipManager", "Hanging up call");
 
   call_hangup(g_call_state.current_call, 0, NULL);
-  g_call_state.current_call = NULL;
-  g_call_state.state = CALL_STATE_IDLE;
+
+  // Do NOT clear current_call here.
+  // We let remove_call() or zombie_cleanup handle the clearing and
+  // auto-switching. This ensures the pointer remains valid for the cleanup
+  // logic to detect "Current was removed".
 
   return 0;
 }
@@ -1083,6 +1116,17 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
         if (g_call_state.current_call == c) {
           g_call_state.current_call = NULL;
           g_call_state.state = CALL_STATE_IDLE;
+
+          // Auto-switch to next active call
+          for (int j = 0; j < MAX_CALLS; j++) {
+            if (g_call_state.active_calls[j].call) {
+              g_call_state.current_call = g_call_state.active_calls[j].call;
+              g_call_state.state = g_call_state.active_calls[j].state;
+              log_info("BaresipManager", "Auto-switched (zombie) to call %p",
+                       g_call_state.current_call);
+              break;
+            }
+          }
         }
         continue;
       }
@@ -1112,7 +1156,12 @@ int baresip_manager_send_dtmf(char key) {
 int baresip_manager_hold_call(void *call_id) {
   struct call *call = (struct call *)call_id;
   if (!call)
+    call = g_call_state.current_call;
+
+  if (!call) {
+    log_warn("BaresipManager", "No call to hold");
     return -1;
+  }
   log_info("BaresipManager", "Holding call %p", call);
   return call_hold(call, true);
 }
@@ -1120,7 +1169,12 @@ int baresip_manager_hold_call(void *call_id) {
 int baresip_manager_resume_call(void *call_id) {
   struct call *call = (struct call *)call_id;
   if (!call)
+    call = g_call_state.current_call;
+
+  if (!call) {
+    log_warn("BaresipManager", "No call to resume");
     return -1;
+  }
   log_info("BaresipManager", "Resuming call %p", call);
   return call_hold(call, false);
 }
@@ -1130,13 +1184,10 @@ int baresip_manager_switch_to(void *call_id) {
   if (!target)
     return -1;
 
-  // Hold current if exists and not target
-  if (g_call_state.current_call && g_call_state.current_call != target) {
-    baresip_manager_hold_call(g_call_state.current_call);
-  }
+  // HOLD/RESUME LOGIC REMOVED per valid usage requirement.
+  // User explicitly wants context switch without automatic audio hold/resume.
+  // Hold/Resume actions must be triggered by UI buttons or new call setup.
 
-  // Resume target
-  baresip_manager_resume_call(target);
   g_call_state.current_call = target;
 
   // find state

@@ -381,7 +381,7 @@ static void menu_btn_clicked(lv_event_t *e) {
 
   lv_obj_t *title = lv_label_create(header);
   lv_label_set_text(title, "Menu");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
 
   lv_obj_t *close_btn = lv_btn_create(header);
   lv_obj_set_size(close_btn, 30, 30);
@@ -693,7 +693,9 @@ static void hangup_btn_clicked(lv_event_t *e) {
 
   log_info("CallApplet", "Hangup clicked");
   baresip_manager_hangup();
-  show_dialer_screen(data);
+  // Do NOT force show_dialer_screen here.
+  // on_call_state_change will handle navigation (Back if 0 calls, Stay/Switch
+  // if >0 calls).
 }
 
 static void mute_btn_clicked(lv_event_t *e) {
@@ -705,6 +707,8 @@ static void mute_btn_clicked(lv_event_t *e) {
     lv_obj_add_state(data->mute_btn, LV_STATE_CHECKED);
   else
     lv_obj_clear_state(data->mute_btn, LV_STATE_CHECKED);
+
+  baresip_manager_mute(data->is_muted);
   log_info("CallApplet", "Mute: %d", data->is_muted);
 }
 
@@ -717,6 +721,8 @@ static void speaker_btn_clicked(lv_event_t *e) {
     lv_obj_add_state(data->speaker_btn, LV_STATE_CHECKED);
   else
     lv_obj_clear_state(data->speaker_btn, LV_STATE_CHECKED);
+
+  // TODO: backend speaker toggle if available
   log_info("CallApplet", "Speaker: %d", data->is_speaker);
 }
 
@@ -725,12 +731,44 @@ static void hold_btn_clicked(lv_event_t *e) {
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
   data->is_hold = !data->is_hold;
+
+  // Call backend using current context (implicit in baresip_manager)
+  // But we need to pass the ID?
+  // actually baresip_manager_switch_to sets current_call.
+  // We can pass NULL to use current, or we should fetch current call ID from
+  // data/state. baresip_manager_hold_call takes void* call_id. If we pass NULL
+  // (or if I update baresip_manager_hold_call to handle NULL as current), it
+  // works. The header says `int baresip_manager_hold_call(void *call_id);`
+  // Let's use `baresip_manager_hold_call(NULL)` assuming implementation handles
+  // it, OR better: use the `switch_to` logic which sets
+  // `g_call_state.current_call`. Wait, I should pass the `current_call`? Call
+  // applet doesn't have the pointer easily unless we iterate. Actually, I'll
+  // update baresip_manager_hold_call in next step to default to current if
+  // NULL. For now let's assume `baresip_manager_hold_call` might fail with
+  // NULL. BUT: `baresip_manager_hangup` uses current if nothing passed.
+  // `hold_call` implementation (I saw earlier):
+  /*
+  int baresip_manager_hold_call(void *call_id) {
+    struct call *call = (struct call *)call_id;
+    if (!call) return -1;
+  */
+  // It FAILS if NULL.
+  // So I must find the opaque pointer.
+  // `update_call_list` has the pointers (`calls[i].id`).
+  // But inside `hold_btn_clicked` I don't know which one is current easily
+  // without iterating `g_call_state`. Wait, I can expose a getter
+  // `baresip_manager_get_current_call()`? Or I can change
+  // `baresip_manager_hold_call` to use current if NULL. I will change
+  // `baresip_manager_hold_call` to use Current Call if NULL is passed.
+
   if (data->is_hold) {
     lv_obj_add_state(data->hold_btn, LV_STATE_CHECKED);
     lv_label_set_text(data->call_status_label, "On Hold");
+    baresip_manager_hold_call(NULL); // Will update backend to handle NULL
   } else {
     lv_obj_clear_state(data->hold_btn, LV_STATE_CHECKED);
     lv_label_set_text(data->call_status_label, "Connected");
+    baresip_manager_resume_call(NULL); // Will update backend to handle NULL
   }
   log_info("CallApplet", "Hold: %d", data->is_hold);
 }
@@ -740,6 +778,34 @@ static void update_call_duration(lv_timer_t *timer) {
   if (!data || !data->active_call_screen ||
       lv_obj_has_flag(data->active_call_screen, LV_OBJ_FLAG_HIDDEN))
     return;
+
+  // Poll active calls to detect silent termination
+  call_info_t calls[4];
+  int raw_count = baresip_manager_get_active_calls(calls, 4);
+  int valid_count = 0;
+  for (int i = 0; i < raw_count; i++) {
+    if (calls[i].state != CALL_STATE_TERMINATED &&
+        calls[i].state != CALL_STATE_IDLE &&
+        calls[i].state != CALL_STATE_UNKNOWN &&
+        calls[i].state < CALL_STATE_TERMINATED) {
+      valid_count++;
+    }
+  }
+
+  if (valid_count == 0) {
+    log_warn("CallApplet",
+             "Watchdog: No valid calls found in timer! Forcing exit.");
+    if (applet_manager_back() != 0) {
+      log_warn("CallApplet",
+               "Watchdog: Back navigation failed. Showing Dialer.");
+      show_dialer_screen(data);
+      update_account_dropdowns(data);
+    }
+    return;
+  }
+
+  // Ensure list is refreshed periodically (handles silent zombie cleanup)
+  update_call_list(data, NULL);
 
   uint32_t elapsed = (lv_tick_get() - data->call_start_time) / 1000;
   uint32_t min = elapsed / 60;
@@ -899,6 +965,14 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
   for (int i = 0; i < raw_count; i++) {
     if (ignore_id && calls[i].id == ignore_id)
       continue;
+
+    // Strict state filtering (Same as on_call_state_change)
+    if (calls[i].state == CALL_STATE_TERMINATED ||
+        calls[i].state == CALL_STATE_IDLE ||
+        calls[i].state == CALL_STATE_UNKNOWN ||
+        calls[i].state >= CALL_STATE_TERMINATED)
+      continue;
+
     valid_calls[count++] = calls[i];
   }
   // Use valid_calls array instead of calls below, or copy back
@@ -1016,10 +1090,33 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
     lv_obj_set_height(card, 100);
 
     // Highlight current call
+    // Highlight current call and update main screen
     if (i == current_idx) {
       lv_obj_set_style_bg_color(card, lv_color_hex(0x666666), 0);
       lv_obj_set_style_border_color(card, lv_palette_main(LV_PALETTE_BLUE), 0);
       lv_obj_set_style_border_width(card, 2, 0);
+
+      // Update Main Screen Details
+      if (data->call_number_label)
+        lv_label_set_text(data->call_number_label, calls[i].peer_uri);
+
+      // Update Hold State in UI
+      data->is_hold = calls[i].is_held;
+      if (data->hold_btn) {
+        if (data->is_hold) {
+          lv_obj_add_state(data->hold_btn, LV_STATE_CHECKED);
+        } else {
+          lv_obj_clear_state(data->hold_btn, LV_STATE_CHECKED);
+        }
+      }
+      if (data->call_status_label) {
+        if (data->is_hold)
+          lv_label_set_text(data->call_status_label, "On Hold");
+        else if (calls[i].state == CALL_STATE_INCOMING)
+          lv_label_set_text(data->call_status_label, "Incoming Call");
+        else
+          lv_label_set_text(data->call_status_label, "Connected");
+      }
     } else {
       lv_obj_set_style_bg_color(card, lv_color_hex(0x444444), 0);
       lv_obj_set_style_border_width(card, 0, 0);
@@ -1041,15 +1138,12 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
     lv_obj_align(uri_lbl, LV_ALIGN_TOP_LEFT, 25, 5);
 
     lv_obj_t *st_lbl = lv_label_create(card);
-    const char *st_txt = (calls[i].state == CALL_STATE_INCOMING) ? "Incoming"
-                         : (calls[i].is_held)                    ? "On Hold"
-                                                                 : "Active";
+    const char *st_txt =
+        (calls[i].state == CALL_STATE_INCOMING) ? "Incoming" : "";
     lv_label_set_text(st_lbl, st_txt);
-    lv_obj_set_style_text_color(st_lbl,
-                                (calls[i].state == CALL_STATE_INCOMING)
-                                    ? lv_color_hex(0xFF5555)
-                                    : lv_color_hex(0xAAAAAA),
-                                0);
+    if (calls[i].state == CALL_STATE_INCOMING) {
+      lv_obj_set_style_text_color(st_lbl, lv_color_hex(0xFF5555), 0);
+    }
     lv_obj_align(st_lbl, LV_ALIGN_BOTTOM_LEFT, 5, -5);
 
     // If incoming, add Answer btn in card? Or just click to switch?
@@ -1141,12 +1235,35 @@ static void on_call_state_change(enum call_state state, const char *peer_uri,
 
     // Filter ignored/terminated call
     int count = 0;
+    log_info("CallApplet", "OnCallStateChange: CheckActiveCalls RawCount=%d",
+             raw_count);
+
     call_info_t valid_calls[4];
     for (int i = 0; i < raw_count; i++) {
-      if (call_id && calls[i].id == call_id)
+      log_info("CallApplet", "  Call[%d]: ID=%p State=%d Peer=%s", i,
+               calls[i].id, calls[i].state, calls[i].peer_uri);
+
+      if (call_id && calls[i].id == call_id) {
+        log_info("CallApplet",
+                 "    -> Skipped (Matches current terminated/changed ID)");
         continue;
+      }
+
+      // Explicitly ignore terminated calls to prevent ghost calls
+      if (calls[i].state == CALL_STATE_TERMINATED ||
+          calls[i].state == CALL_STATE_IDLE ||
+          calls[i].state == CALL_STATE_UNKNOWN ||
+          calls[i].state >= CALL_STATE_TERMINATED) {
+        log_info("CallApplet", "    -> Skipped (State %d is not active)",
+                 calls[i].state);
+        continue;
+      }
+
       valid_calls[count++] = calls[i];
+      log_info("CallApplet", "    -> Kept (Valid)");
     }
+
+    log_info("CallApplet", "  Final Valid Count: %d", count);
 
     if (count > 0) {
       // Find a suitable call to switch focus to
@@ -1181,9 +1298,16 @@ static void on_call_state_change(enum call_state state, const char *peer_uri,
       }
     }
     // No calls left.
-    // Return to Home (Close In-Call Screen)
-    log_info("CallApplet", "All calls terminated, returning to Home");
-    applet_manager_back();
+    // Try to return to previous Applet (e.g. Call Log, Contacts).
+    // If we are the root applet (launched directly or Back failed), show
+    // Dialer.
+    log_info("CallApplet",
+             "All calls terminated. Attempting Back navigation...");
+    if (applet_manager_back() != 0) {
+      log_info("CallApplet", "Back navigation failed. Showing Dialer.");
+      show_dialer_screen(g_call_data);
+      update_account_dropdowns(g_call_data);
+    }
   }
 
   // Always update list on state change
@@ -1260,7 +1384,8 @@ static int call_init(applet_t *applet) {
   // === ACTIVE CALL SCREEN ===
   lv_obj_t *active_call_cont = lv_obj_create(data->active_call_screen);
   lv_obj_set_size(active_call_cont, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_flex_flow(active_call_cont, LV_FLEX_FLOW_ROW); // CHANGED to ROW
+  lv_obj_set_flex_flow(active_call_cont,
+                       LV_FLEX_FLOW_ROW); // CHANGED to ROW
   lv_obj_set_style_pad_all(active_call_cont, 0, 0);
   lv_obj_clear_flag(active_call_cont, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -1297,7 +1422,7 @@ static int call_init(applet_t *applet) {
 
   data->call_number_label = lv_label_create(top_info);
   lv_label_set_text(data->call_number_label, "0000");
-  lv_obj_set_style_text_font(data->call_number_label, &lv_font_montserrat_14,
+  lv_obj_set_style_text_font(data->call_number_label, &lv_font_montserrat_16,
                              0);
 
   data->call_status_label = lv_label_create(top_info);
@@ -1516,19 +1641,27 @@ static void call_start(applet_t *applet) {
   }
 
   // Note: if there ARE active calls, the user can still use the dialer to
-  // start a NEW call. The 'return to call' logic is handled via notifications
-  // or if the user manually navigates back (which we might need to add a
-  // button for in Dialer if calls exist). For now, adhering strictly to
-  // "always show dialer screen" on launch.
+  // start a NEW call. The 'return to call' logic is handled via
+  // notifications or if the user manually navigates back (which we might
+  // need to add a button for in Dialer if calls exist). For now, adhering
+  // strictly to "always show dialer screen" on launch.
 }
 
 static void call_pause(applet_t *applet) {
-  (void)applet;
+  call_data_t *data = (call_data_t *)applet->user_data;
   log_info("CallApplet", "Paused");
+  if (data->call_timer)
+    lv_timer_pause(data->call_timer);
+  if (data->status_timer)
+    lv_timer_pause(data->status_timer);
 }
 
 static void call_resume(applet_t *applet) {
   call_data_t *data = (call_data_t *)applet->user_data;
+  if (data->call_timer)
+    lv_timer_resume(data->call_timer);
+  if (data->status_timer)
+    lv_timer_resume(data->status_timer);
 
   // Sync state from Baresip Manager
   data->current_state = baresip_manager_get_state();
