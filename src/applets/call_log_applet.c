@@ -163,11 +163,14 @@ static int call_log_init(applet_t *applet) {
 
     lv_obj_t *number_label = lv_label_create(details_row);
     char number_display[150];
-    if (strncmp(uri_buf, "sip:", 4) == 0) {
-      snprintf(number_display, sizeof(number_display), "%s", uri_buf);
-    } else {
-      snprintf(number_display, sizeof(number_display), "sip:%s", uri_buf);
-    }
+    // Strip sip: or sips: prefix for display
+    const char *display_ptr = uri_buf;
+    if (strncmp(display_ptr, "sip:", 4) == 0)
+      display_ptr += 4;
+    else if (strncmp(display_ptr, "sips:", 5) == 0)
+      display_ptr += 5;
+
+    snprintf(number_display, sizeof(number_display), "%s", display_ptr);
 
     lv_label_set_text(number_label, number_display);
     lv_obj_set_style_text_color(number_label, lv_color_hex(0x808080),

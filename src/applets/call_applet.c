@@ -558,6 +558,37 @@ static void show_dialer_screen(call_data_t *data) {
   }
 }
 
+// Helper to clean SIP URI for display
+static void format_sip_uri(const char *in, char *out, size_t out_size) {
+  if (!in || !out || out_size == 0) {
+    if (out && out_size > 0)
+      out[0] = '\0';
+    return;
+  }
+
+  const char *start = in;
+
+  // Handle "Display Name" <sip:user@domain> format
+  const char *bracket_open = strchr(in, '<');
+  if (bracket_open) {
+    start = bracket_open + 1;
+  }
+
+  // Skip scheme
+  if (strncmp(start, "sip:", 4) == 0) {
+    start += 4;
+  } else if (strncmp(start, "sips:", 5) == 0) {
+    start += 5;
+  }
+
+  // Copy until end, semicolon, or closing bracket
+  size_t i = 0;
+  while (*start && *start != ';' && *start != '>' && i < out_size - 1) {
+    out[i++] = *start++;
+  }
+  out[i] = '\0';
+}
+
 static void show_active_call_screen(call_data_t *data, const char *number,
                                     bool incoming) {
   lv_obj_add_flag(data->dialer_screen, LV_OBJ_FLAG_HIDDEN);
@@ -574,8 +605,11 @@ static void show_active_call_screen(call_data_t *data, const char *number,
   data->is_speaker = false;
   data->is_hold = false;
 
-  if (data->call_number_label)
-    lv_label_set_text(data->call_number_label, number);
+  if (data->call_number_label) {
+    char formatted_number[256];
+    format_sip_uri(number, formatted_number, sizeof(formatted_number));
+    lv_label_set_text(data->call_number_label, formatted_number);
+  }
   if (data->call_name_label)
     lv_label_set_text(data->call_name_label, "Unknown");
 
@@ -1006,8 +1040,11 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
     bool is_incoming = (current->state == CALL_STATE_INCOMING);
 
     // Update labels
-    if (data->call_number_label)
-      lv_label_set_text(data->call_number_label, current->peer_uri);
+    if (data->call_number_label) {
+      char fmt[256];
+      format_sip_uri(current->peer_uri, fmt, sizeof(fmt));
+      lv_label_set_text(data->call_number_label, fmt);
+    }
     if (data->call_name_label)
       lv_label_set_text(data->call_name_label, "Unknown"); // TODO: real name
 
@@ -1084,8 +1121,12 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
     return;
   lv_obj_clean(data->call_list_cont);
 
-  // Always show call list container
-  lv_obj_clear_flag(data->call_list_cont, LV_OBJ_FLAG_HIDDEN);
+  // Show call list only if more than 1 call
+  if (count > 1) {
+    lv_obj_clear_flag(data->call_list_cont, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(data->call_list_cont, LV_OBJ_FLAG_HIDDEN);
+  }
 
   for (int i = 0; i < count; i++) {
 
@@ -1102,8 +1143,11 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
       lv_obj_set_style_border_width(card, 2, 0);
 
       // Update Main Screen Details
-      if (data->call_number_label)
-        lv_label_set_text(data->call_number_label, calls[i].peer_uri);
+      if (data->call_number_label) {
+        char fmt[256];
+        format_sip_uri(calls[i].peer_uri, fmt, sizeof(fmt));
+        lv_label_set_text(data->call_number_label, fmt);
+      }
 
       // Update Hold State in UI
       data->is_hold = calls[i].is_held;
@@ -1137,7 +1181,9 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
     lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 5, 5);
 
     lv_obj_t *uri_lbl = lv_label_create(card);
-    lv_label_set_text(uri_lbl, calls[i].peer_uri);
+    char fmt[256];
+    format_sip_uri(calls[i].peer_uri, fmt, sizeof(fmt));
+    lv_label_set_text(uri_lbl, fmt);
     lv_obj_set_width(uri_lbl, 100);
     lv_label_set_long_mode(uri_lbl, LV_LABEL_LONG_DOT);
     lv_obj_align(uri_lbl, LV_ALIGN_TOP_LEFT, 25, 5);
@@ -1205,8 +1251,11 @@ static void on_call_state_change(enum call_state state, const char *peer_uri,
     if (peer_uri) {
       if (g_call_data->call_name_label)
         lv_label_set_text(g_call_data->call_name_label, peer_uri);
-      if (g_call_data->call_number_label)
-        lv_label_set_text(g_call_data->call_number_label, peer_uri);
+      if (g_call_data->call_number_label) {
+        char fmt[256];
+        format_sip_uri(peer_uri, fmt, sizeof(fmt));
+        lv_label_set_text(g_call_data->call_number_label, fmt);
+      }
     }
     if (g_call_data->call_status_label)
       lv_label_set_text(g_call_data->call_status_label, "Incoming Call...");

@@ -352,9 +352,7 @@ static void update_account_dropdowns(settings_data_t *data) {
     if (i > 0)
       strcat(options, "\n");
     char entry[256];
-    snprintf(entry, sizeof(entry), "%s@%s",
-             data->accounts[i].display_name[0] ? data->accounts[i].display_name
-                                               : data->accounts[i].username,
+    snprintf(entry, sizeof(entry), "%s@%s", data->accounts[i].username,
              data->accounts[i].server);
     strcat(options, entry);
   }
@@ -414,19 +412,23 @@ static void refresh_account_list(settings_data_t *data) {
 
     lv_obj_t *lbl = lv_label_create(info);
     char buf[128];
-    if (strlen(acc->display_name) > 0)
-      snprintf(buf, sizeof(buf), "%s", acc->display_name);
-    else
-      snprintf(buf, sizeof(buf), "%s", acc->username);
+    // Title: username@server
+    snprintf(buf, sizeof(buf), "%s@%s", acc->username, acc->server);
     lv_label_set_text(lbl, buf);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0); // Black text
 
-    lv_obj_t *sub = lv_label_create(info);
-    snprintf(buf, sizeof(buf), "sip:%s@%s", acc->username, acc->server);
-    lv_label_set_text(sub, buf);
-    lv_obj_set_style_text_color(sub, lv_color_hex(0x808080), 0); // Grey text
-    lv_obj_set_style_text_font(sub, &lv_font_montserrat_16, 0);
+    // Subtitle: Display Name (if exists) -> no, user removed unnecessary info.
+    // Let's just remove the sub-label if it was just repeating sip info.
+    // Or maybe keep Display Name if it's different?
+    // User said "remove OTHER unnecessary info".
+    // I will show Display Name if set, otherwise nothing.
+    if (strlen(acc->display_name) > 0) {
+      lv_obj_t *sub = lv_label_create(info);
+      lv_label_set_text(sub, acc->display_name);
+      lv_obj_set_style_text_color(sub, lv_color_hex(0x808080), 0);
+      lv_obj_set_style_text_font(sub, &lv_font_montserrat_16, 0);
+    }
 
     // Buttons
     lv_obj_t *btns = lv_obj_create(item);
