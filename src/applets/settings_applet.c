@@ -190,7 +190,7 @@ static void load_settings(settings_data_t *data) {
   data->account_count = config_load_accounts(data->accounts, MAX_ACCOUNTS);
 
   if (data->config.default_account_index >= data->account_count) {
-    data->config.default_account_index = 0;
+    data->config.default_account_index = -1; // Default to None
   }
 }
 
@@ -323,7 +323,13 @@ static void default_account_changed(lv_event_t *e) {
   settings_data_t *data = (settings_data_t *)applet->user_data;
   lv_obj_t *dropdown = lv_event_get_target(e);
 
-  data->config.default_account_index = lv_dropdown_get_selected(dropdown);
+  int selected = lv_dropdown_get_selected(dropdown);
+  if (selected >= data->account_count) {
+    data->config.default_account_index = -1; // None
+  } else {
+    data->config.default_account_index = selected;
+  }
+
   save_settings(data);
   log_debug("SettingsApplet", "Default account changed to index: %d",
             data->config.default_account_index);
@@ -357,13 +363,13 @@ static void update_account_dropdowns(settings_data_t *data) {
     strcat(options, entry);
   }
 
-  // Add "None" option
+  // Add "Always Ask" option
   if (data->account_count > 0)
     strcat(options, "\n");
-  strcat(options, "None");
+  strcat(options, "Always Ask");
 
   if (strlen(options) == 0)
-    strcpy(options, "None"); // Should at least have None
+    strcpy(options, "Always Ask"); // Should at least have Always Ask
 
   if (data->default_account_dropdown)
     lv_dropdown_set_options(data->default_account_dropdown, options);

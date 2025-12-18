@@ -2,16 +2,120 @@
 #include "applet_manager.h"
 #include "baresip_manager.h"
 #include "call_applet.h"
+#include "config_manager.h"
 #include "history_manager.h"
 #include "logger.h"
 #include <stdio.h>
 #include <string.h>
 
+// Picker State
+static char g_pending_number[128] = {0};
+static bool g_pending_is_video = false;
+static lv_obj_t *g_account_picker_modal = NULL;
+
+static void close_picker_modal(void);
+static void show_account_picker(const char *number, bool is_video);
 // Event handler for back button
 static void back_btn_clicked(lv_event_t *e) { applet_manager_back(); }
 
 // External reference to call applet
 extern applet_t call_applet;
+
+// Picker Implementation
+static void close_picker_modal(void) {
+  if (g_account_picker_modal) {
+    lv_obj_del(g_account_picker_modal);
+    g_account_picker_modal = NULL;
+  }
+}
+
+static void account_picker_cancel(lv_event_t *e) { close_picker_modal(); }
+
+static void account_picker_item_clicked(lv_event_t *e) {
+  const char *aor = (const char *)lv_event_get_user_data(e);
+  if (aor && strlen(g_pending_number) > 0) {
+    int ret = -1;
+    if (g_pending_is_video) {
+      log_info("CallLogApplet", "Picking account %s for VIDEO calling", aor);
+      ret = baresip_manager_videocall_with_account(g_pending_number, aor);
+    } else {
+      log_info("CallLogApplet", "Picking account %s for audio calling", aor);
+      ret = baresip_manager_call_with_account(g_pending_number, aor);
+    }
+
+    if (ret == 0) {
+      close_picker_modal();
+      call_applet_request_active_view();
+      applet_manager_launch_applet(&call_applet);
+    }
+  }
+}
+
+static void show_account_picker(const char *number, bool is_video) {
+  if (g_account_picker_modal)
+    return; // Already open
+
+  strncpy(g_pending_number, number, sizeof(g_pending_number) - 1);
+  g_pending_is_video = is_video;
+
+  g_account_picker_modal = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(g_account_picker_modal, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(g_account_picker_modal, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(g_account_picker_modal, LV_OPA_50, 0);
+  lv_obj_set_flex_flow(g_account_picker_modal, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(g_account_picker_modal, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *panel = lv_obj_create(g_account_picker_modal);
+  lv_obj_set_size(panel, LV_PCT(80), LV_PCT(60));
+  lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(panel, 20, 0);
+
+  lv_obj_t *title = lv_label_create(panel);
+  lv_label_set_text(title, "Choose Account");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_pad_bottom(title, 20, 0);
+  lv_obj_center(title);
+
+  // Load accounts
+  voip_account_t accounts[MAX_ACCOUNTS];
+  int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+
+  for (int i = 0; i < count; i++) {
+    if (!accounts[i].enabled)
+      continue;
+
+    lv_obj_t *btn = lv_btn_create(panel);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, 50);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s (%s)",
+             accounts[i].display_name[0] ? accounts[i].display_name
+                                         : accounts[i].username,
+             accounts[i].server);
+    lv_label_set_text(lbl, buf);
+    lv_obj_center(lbl);
+
+    char *aor_copy = lv_mem_alloc(256);
+    snprintf(aor_copy, 256, "sip:%s@%s", accounts[i].username,
+             accounts[i].server);
+
+    lv_obj_add_event_cb(btn, account_picker_item_clicked, LV_EVENT_CLICKED,
+                        aor_copy);
+  }
+
+  // Cancel Button
+  lv_obj_t *cancel_btn = lv_btn_create(panel);
+  lv_obj_set_width(cancel_btn, LV_PCT(100));
+  lv_obj_set_style_bg_color(cancel_btn, lv_palette_main(LV_PALETTE_RED), 0);
+  lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
+  lv_label_set_text(cancel_lbl, "Cancel");
+  lv_obj_center(cancel_lbl);
+  lv_obj_add_event_cb(cancel_btn, account_picker_cancel, LV_EVENT_CLICKED,
+                      NULL);
+}
 
 // Event handler for call back button
 static void call_back_clicked(lv_event_t *e) {
@@ -35,7 +139,28 @@ static void call_back_clicked(lv_event_t *e) {
                  entry->account_aor);
         ret = baresip_manager_call_with_account(number_buf, entry->account_aor);
       } else {
-        ret = baresip_manager_call(number_buf);
+        // No stored account, check default config
+        app_config_t config;
+        config_load_app_settings(&config);
+
+        if (config.default_account_index >= 0) {
+          voip_account_t accounts[MAX_ACCOUNTS];
+          int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+          if (config.default_account_index < count) {
+            // Use Default
+            char aor[256];
+            voip_account_t *acc = &accounts[config.default_account_index];
+            snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+            ret = baresip_manager_call_with_account(number_buf, aor);
+          } else {
+            ret = baresip_manager_call(number_buf); // Fallback
+          }
+        } else {
+          // No default account, Show Picker
+          log_info("CallLogApplet", "No default account, showing picker");
+          show_account_picker(number_buf, false);
+          return;
+        }
       }
 
       if (ret == 0) {
@@ -45,6 +170,54 @@ static void call_back_clicked(lv_event_t *e) {
       }
     } else {
       log_warn("CallLogApplet", "Cannot call empty number");
+    }
+  }
+}
+
+// Event handler for video call back button
+static void video_call_back_clicked(lv_event_t *e) {
+  const call_log_entry_t *entry =
+      (const call_log_entry_t *)lv_event_get_user_data(e);
+  if (entry) {
+    char number_buf[128];
+    snprintf(number_buf, sizeof(number_buf), "%s", entry->number);
+
+    log_info("CallLogApplet", "Video calling back %s", number_buf);
+
+    if (strlen(number_buf) > 0) {
+      int ret = -1;
+      if (strlen(entry->account_aor) > 0) {
+        ret = baresip_manager_videocall_with_account(number_buf,
+                                                     entry->account_aor);
+      } else {
+        // No stored account, check default
+        app_config_t config;
+        config_load_app_settings(&config);
+
+        if (config.default_account_index >= 0) {
+          voip_account_t accounts[MAX_ACCOUNTS];
+          int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+          if (config.default_account_index < count) {
+            char aor[256];
+            voip_account_t *acc = &accounts[config.default_account_index];
+            snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+            ret = baresip_manager_videocall_with_account(number_buf, aor);
+          } else {
+            ret = baresip_manager_videocall(number_buf);
+          }
+        } else {
+          // Picker
+          log_info("CallLogApplet",
+                   "No default account, showing picker for VIDEO");
+          show_account_picker(number_buf, true);
+          return;
+        }
+      }
+
+      if (ret == 0) {
+        call_applet_request_active_view();
+        applet_manager_launch_applet(&call_applet);
+      }
     }
   }
 }
@@ -194,6 +367,17 @@ static int call_log_init(applet_t *applet) {
     lv_label_set_text(call_label, LV_SYMBOL_CALL);
     lv_obj_center(call_label);
     lv_obj_add_event_cb(call_btn, call_back_clicked, LV_EVENT_CLICKED,
+                        (void *)entry);
+
+    // Video Call button
+    lv_obj_t *video_btn = lv_btn_create(log_item);
+    lv_obj_set_size(video_btn, 60, 40);
+    lv_obj_set_style_bg_color(video_btn, lv_color_hex(0x0055AA),
+                              0); // Blue for video
+    lv_obj_t *video_label = lv_label_create(video_btn);
+    lv_label_set_text(video_label, LV_SYMBOL_VIDEO);
+    lv_obj_center(video_label);
+    lv_obj_add_event_cb(video_btn, video_call_back_clicked, LV_EVENT_CLICKED,
                         (void *)entry);
   }
 

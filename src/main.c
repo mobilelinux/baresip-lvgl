@@ -71,6 +71,7 @@ static int init_display(void) {
   disp_drv.flush_cb = sdl_display_flush;
   disp_drv.hor_res = SDL_HOR_RES;
   disp_drv.ver_res = SDL_VER_RES;
+  disp_drv.screen_transp = 1;
 
   lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
   if (!disp) {
@@ -128,6 +129,12 @@ int main(void) {
     logger_init(config.log_level);
   } else {
     logger_init(LOG_LEVEL_INFO);
+  }
+
+  // Initialize Baresip Manager EARLY (to load modules before applets use them)
+  if (baresip_manager_init() != 0) {
+    log_error("Main", "Failed to initialize Baresip Manager");
+    return 1;
   }
 
   // Initialize applet manager

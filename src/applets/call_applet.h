@@ -8,5 +8,6 @@
  * on its next launch/resume.
  */
 void call_applet_request_active_view(void);
+void call_applet_request_incoming_view(void);
 
 #endif // CALL_APPLET_H

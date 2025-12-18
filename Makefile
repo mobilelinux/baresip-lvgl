@@ -15,14 +15,23 @@ OBJ_DIR = $(BUILD_DIR)/obj
 
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -std=c99 -I$(INC_DIR) -I$(LVGL_DIR) -I$(LV_DRIVERS_DIR) -I. \
-         -I deps/baresip/include -I deps/re/include \
-         $(shell sdl2-config --cflags)
+COMMON_CFLAGS = -Wall -Wextra -O2 -I$(INC_DIR) -I$(LVGL_DIR) -I$(LV_DRIVERS_DIR) -I. \
+                 -I deps/baresip/include -I deps/re/include \
+                 $(shell sdl2-config --cflags) \
+                 $(shell pkg-config --cflags libavcodec libavutil libavformat libswscale libswresample opus) \
+                 -I/opt/homebrew/include -DSTATIC
+
+CFLAGS = $(COMMON_CFLAGS) -std=c99
+OBJCFLAGS = $(COMMON_CFLAGS) -fno-objc-arc
+
 LDFLAGS = -L/opt/homebrew/lib -lm $(shell sdl2-config --libs) \
           deps/baresip/build/libbaresip.a \
           deps/re/build/libre.a \
           -lssl -lcrypto -lpthread -lz -lopus -lresolv -lsqlite3 \
-          -framework CoreAudio -framework AudioToolbox -framework CoreFoundation -framework SystemConfiguration
+          -lavcodec -lavdevice -lavfilter -lavformat -lavutil -lswresample -lswscale \
+          -lx264 -lvpx \
+          -framework CoreAudio -framework AudioToolbox -framework CoreFoundation -framework SystemConfiguration -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Foundation
+
 
 # Source files
 SRCS = $(SRC_DIR)/main.c \
@@ -54,7 +63,33 @@ ALL_SRCS = $(SRCS) $(LVGL_SRCS) $(LV_DRIVERS_SRCS)
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 LVGL_OBJS = $(patsubst $(LVGL_DIR)/%.c,$(OBJ_DIR)/lvgl/%.o,$(LVGL_SRCS))
 LV_DRIVERS_OBJS = $(patsubst $(LV_DRIVERS_DIR)/%.c,$(OBJ_DIR)/lv_drivers/%.o,$(LV_DRIVERS_SRCS))
-ALL_OBJS = $(OBJS) $(LVGL_OBJS) $(LV_DRIVERS_OBJS)
+
+# Baresip Module Sources
+MODULE_SRCS = deps/baresip/modules/avcodec/avcodec.c \
+              deps/baresip/modules/avcodec/decode.c \
+              deps/baresip/modules/avcodec/encode.c \
+              deps/baresip/modules/avcodec/sdp.c \
+              deps/baresip/modules/avformat/avformat.c \
+              deps/baresip/modules/avformat/video.c \
+              deps/baresip/modules/avformat/audio.c \
+              deps/baresip/modules/swscale/swscale.c \
+              deps/baresip/modules/fakevideo/fakevideo.c \
+              deps/baresip/modules/selfview/selfview.c \
+              deps/baresip/modules/g711/g711.c \
+              deps/baresip/modules/opus/opus.c \
+              deps/baresip/modules/audiounit/audiounit.c \
+              deps/baresip/modules/stun/stun.c \
+              deps/baresip/modules/turn/turn.c \
+              deps/baresip/modules/ice/ice.c
+
+MODULE_OBJS_C = $(patsubst %.c,$(OBJ_DIR)/%.o,$(MODULE_SRCS))
+
+# Obc Module Sources
+MODULE_SRCS_OBJC = deps/baresip/modules/avcapture/avcapture.m
+MODULE_OBJS_OBJC = $(patsubst %.m,$(OBJ_DIR)/%.o,$(MODULE_SRCS_OBJC))
+
+
+ALL_OBJS = $(OBJS) $(LVGL_OBJS) $(LV_DRIVERS_OBJS) $(MODULE_OBJS_C) $(MODULE_OBJS_OBJC)
 
 # Default target
 all: $(BUILD_DIR)/$(TARGET)
@@ -89,6 +124,18 @@ $(OBJ_DIR)/lv_drivers/%.o: $(LV_DRIVERS_DIR)/%.c
 	@mkdir -p $(dir $@)
 	@echo "Compiling lv_drivers: $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile deps source files
+$(OBJ_DIR)/deps/%.o: deps/%.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling deps: $<..."
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile deps objc source files
+$(OBJ_DIR)/deps/%.o: deps/%.m
+	@mkdir -p $(dir $@)
+	@echo "Compiling deps objc: $<..."
+	$(CC) $(OBJCFLAGS) -c $< -o $@
 
 # Clean
 clean:

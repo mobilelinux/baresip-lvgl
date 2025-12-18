@@ -39,7 +39,7 @@ int config_load_app_settings(app_config_t *config) {
   // Defaults
   memset(config, 0, sizeof(app_config_t));
   config->preferred_codec = CODEC_OPUS;
-  config->default_account_index = 0;
+  config->default_account_index = -1; // Default to Always Ask
   config->start_automatically = false;
   config->address_family = 1; // Default IPv4
   strcpy(config->user_agent, "baresip-lvgl");

@@ -26,7 +26,11 @@ void baresip_manager_set_reg_callback(reg_event_cb cb);
 reg_status_t baresip_manager_get_account_status(const char *aor);
 int baresip_manager_call(const char *uri);
 int baresip_manager_call_with_account(const char *uri, const char *account_aor);
-int baresip_manager_answer(void);
+int baresip_manager_videocall(const char *uri);
+int baresip_manager_videocall_with_account(const char *uri,
+                                           const char *account_aor);
+int baresip_manager_answer_call(bool video);
+int baresip_manager_reject_call(void *call_ptr);
 int baresip_manager_hangup(void);
 int baresip_manager_send_dtmf(char key);
 enum call_state baresip_manager_get_state(void);
@@ -55,5 +59,8 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count);
 int baresip_manager_switch_to(void *call_id);
 int baresip_manager_hold_call(void *call_id);
 int baresip_manager_resume_call(void *call_id);
+// Video Display
+void baresip_manager_set_video_rect(int x, int y, int w, int h);
+void baresip_manager_set_local_video_rect(int x, int y, int w, int h);
 
 #endif // BARESIP_MANAGER_H

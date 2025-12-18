@@ -17,6 +17,7 @@ static applet_t *g_applet = NULL;
 
 // Account Picker State
 static char g_pending_number[128] = {0};
+static bool g_pending_is_video = false;
 static lv_obj_t *g_account_picker_modal = NULL;
 
 // Forward declarations
@@ -129,9 +130,16 @@ static void account_picker_cancel(lv_event_t *e) { close_picker_modal(); }
 static void account_picker_item_clicked(lv_event_t *e) {
   const char *aor = (const char *)lv_event_get_user_data(e);
   if (aor && strlen(g_pending_number) > 0) {
-    log_info("ContactsApplet", "Picking account %s for number %s", aor,
-             g_pending_number);
-    if (baresip_manager_call_with_account(g_pending_number, aor) == 0) {
+    int ret = -1;
+    if (g_pending_is_video) {
+      log_info("ContactsApplet", "Picking account %s for VIDEO calling", aor);
+      ret = baresip_manager_videocall_with_account(g_pending_number, aor);
+    } else {
+      log_info("ContactsApplet", "Picking account %s for audio calling", aor);
+      ret = baresip_manager_call_with_account(g_pending_number, aor);
+    }
+
+    if (ret == 0) {
       close_picker_modal();
       call_applet_request_active_view();
       applet_manager_launch_applet(&call_applet);
@@ -139,11 +147,12 @@ static void account_picker_item_clicked(lv_event_t *e) {
   }
 }
 
-static void show_account_picker(const char *number) {
+static void show_account_picker(const char *number, bool is_video) {
   if (g_account_picker_modal)
     return; // Already open
 
   strncpy(g_pending_number, number, sizeof(g_pending_number) - 1);
+  g_pending_is_video = is_video;
 
   g_account_picker_modal = lv_obj_create(lv_scr_act());
   lv_obj_set_size(g_account_picker_modal, LV_PCT(100), LV_PCT(100));
@@ -251,7 +260,48 @@ static void contact_item_clicked(lv_event_t *e) {
 
   // Fallback: Show Picker
   log_info("ContactsApplet", "No default account, showing picker");
-  show_account_picker(c->number);
+  show_account_picker(c->number, false);
+}
+
+static void contact_video_clicked(lv_event_t *e) {
+  const contact_t *c = (const contact_t *)lv_event_get_user_data(e);
+  if (!c)
+    return;
+
+  app_config_t config;
+  config_load_app_settings(&config);
+
+  // Check Default Account
+  if (config.default_account_index >= 0) {
+    // Valid index, try to load it
+    voip_account_t accounts[MAX_ACCOUNTS];
+    int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+    if (config.default_account_index < count) {
+      // Use this account
+      char aor[256];
+      voip_account_t *acc = &accounts[config.default_account_index];
+      snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+
+      log_info("ContactsApplet", "Video calling with default account: %s", aor);
+      if (baresip_manager_videocall_with_account(c->number, aor) == 0) {
+        call_applet_request_active_view();
+        applet_manager_launch_applet(&call_applet);
+      }
+      return;
+    }
+  }
+
+  // Fallback: Video Call directly (default UA) - or should we show picker?
+  // Let's just video call directly if no default account set, using default UA.
+  // Or show picker? Existing logic shows picker.
+  // But picker `show_account_picker` currently triggers `contact_item_clicked`
+  // logic (via `account_picker_item_clicked` which calls
+  // `baresip_manager_call_with_account`). The picker doesn't support video
+  // choice yet. For simplicity: If no default account, use default UA for
+  // video.
+  // Fallback: Show Picker for Video
+  log_info("ContactsApplet", "No default account, showing picker for VIDEO");
+  show_account_picker(c->number, true);
 }
 
 // ------------------- UI DRAWING -------------------
@@ -323,6 +373,22 @@ static void draw_list(void) {
     lv_obj_set_style_text_color(edit_icon, lv_palette_main(LV_PALETTE_TEAL), 0);
     lv_obj_set_style_text_font(edit_icon, &lv_font_montserrat_20, 0);
     lv_obj_center(edit_icon);
+
+    lv_obj_t *video_btn = lv_btn_create(item);
+    lv_obj_set_size(video_btn, 40, 40);
+    lv_obj_align(video_btn, LV_ALIGN_RIGHT_MID, -45, 0); // Left of Edit
+    lv_obj_set_style_bg_opa(video_btn, 0, 0);
+    lv_obj_set_style_shadow_width(video_btn, 0, 0);
+
+    lv_obj_t *video_icon = lv_label_create(video_btn);
+    lv_label_set_text(video_icon, LV_SYMBOL_VIDEO);
+    lv_obj_set_style_text_color(video_icon, lv_palette_main(LV_PALETTE_BLUE),
+                                0);
+    lv_obj_set_style_text_font(video_icon, &lv_font_montserrat_20, 0);
+    lv_obj_center(video_icon);
+
+    lv_obj_add_event_cb(video_btn, contact_video_clicked, LV_EVENT_CLICKED,
+                        (void *)c);
 
     lv_obj_add_event_cb(edit_btn, edit_btn_clicked, LV_EVENT_CLICKED,
                         (void *)c);
@@ -441,13 +507,35 @@ static void draw_editor(void) {
   }
 
   if (!is_new_contact) {
-    lv_obj_t *call_btn = lv_btn_create(content);
-    lv_obj_set_size(call_btn, LV_PCT(50), 50);
+    lv_obj_t *actions_cont = lv_obj_create(content);
+    lv_obj_set_size(actions_cont, LV_PCT(100), 60);
+    lv_obj_set_style_border_width(actions_cont, 0, 0);
+    lv_obj_set_style_bg_opa(actions_cont, 0, 0);
+    lv_obj_set_flex_flow(actions_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(actions_cont, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *call_btn = lv_btn_create(actions_cont);
+    lv_obj_set_size(call_btn, LV_PCT(48), 50);
     lv_obj_set_style_bg_color(call_btn, lv_palette_main(LV_PALETTE_GREEN), 0);
 
     lv_obj_t *call_icon = lv_label_create(call_btn);
     lv_label_set_text(call_icon, LV_SYMBOL_CALL " Call");
     lv_obj_center(call_icon);
+    // Note: Assuming contact_item_clicked works here too if we pass
+    // current_edit_contact? We need to pass address of current_edit_contact.
+    lv_obj_add_event_cb(call_btn, contact_item_clicked, LV_EVENT_CLICKED,
+                        (void *)&current_edit_contact);
+
+    lv_obj_t *video_btn = lv_btn_create(actions_cont);
+    lv_obj_set_size(video_btn, LV_PCT(48), 50);
+    lv_obj_set_style_bg_color(video_btn, lv_palette_main(LV_PALETTE_BLUE), 0);
+
+    lv_obj_t *video_icon = lv_label_create(video_btn);
+    lv_label_set_text(video_icon, LV_SYMBOL_VIDEO " Video");
+    lv_obj_center(video_icon);
+    lv_obj_add_event_cb(video_btn, contact_video_clicked, LV_EVENT_CLICKED,
+                        (void *)&current_edit_contact);
 
     lv_obj_add_event_cb(call_btn, contact_item_clicked, LV_EVENT_CLICKED,
                         (void *)&current_edit_contact);

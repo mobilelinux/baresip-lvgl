@@ -1,8 +1,11 @@
 #include "baresip_manager.h"
 #include "history_manager.h"
 #include "logger.h"
+#include "lv_drivers/sdl/sdl.h"
+#include <SDL.h>
 #include <baresip.h>
 #include <re.h>
+#include <rem_vid.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,11 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 // Helper to check if string is empty
 // str_isset is provided by re_fmt.h from re.h
 
-// Static Module Exports
 extern const struct mod_export exports_g711;
 extern const struct mod_export exports_opus;
 extern const struct mod_export exports_account;
@@ -38,6 +41,12 @@ typedef struct {
   char peer_uri[256];
   enum call_state state;
 } active_call_t;
+
+// Video Display Module Pointers
+static struct vidisp *vid = NULL;  // Remote (sdl_vidisp)
+static struct vidisp *vid2 = NULL; // Local (window)
+
+static int baresip_manager_register_vidisp(void);
 
 // Global state
 static struct {
@@ -455,13 +464,351 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
   }
 }
 
+// ============================================================================
+// SDL Video Display Module Implementation
+// ============================================================================
+
+struct vidisp_st {
+  struct le le;
+  SDL_Texture *texture;
+  struct vidframe *frame;
+  struct vidsz size;
+  mtx_t *lock;
+  bool new_frame;
+  int orientation;
+  bool is_local;
+};
+
+static struct list vidisp_list;
+static mtx_t *vidisp_list_lock = NULL;
+
+static void sdl_vidisp_destructor(void *arg) {
+  struct vidisp_st *st = arg;
+
+  if (vidisp_list_lock) {
+    mtx_lock(vidisp_list_lock);
+    list_unlink(&st->le);
+    mtx_unlock(vidisp_list_lock);
+  }
+
+  if (st->frame)
+    mem_deref(st->frame);
+  if (st->lock)
+    mem_deref(st->lock);
+  // Texture is destroyed by SDL/Renderer effectively
+}
+
+static int sdl_vidisp_alloc(struct vidisp_st **stp, const struct vidisp *vd,
+                            struct vidisp_prm *prm, const char *dev,
+                            vidisp_resize_h *resizeh, void *arg) {
+  struct vidisp_st *st;
+  int err;
+
+  // Determine if this is the local self-view
+  // We check for specific device names OR if the display module instance
+  // matches our registered local video display alias (vid2)
+  // ALSO: If dev is NULL, it is likely the 'selfview' module allocating (remote
+  // streams imply a peer name)
+  bool is_local =
+      (!dev) ||
+      (dev && (strcmp(dev, "local") == 0 || strcmp(dev, "selfview") == 0 ||
+               strcmp(dev, "window") == 0)) ||
+      (vd == vid2);
+
+  (void)dev;
+  (void)resizeh;
+  (void)arg;
+
+  st = mem_zalloc(sizeof(*st), sdl_vidisp_destructor);
+  if (!st) {
+    // vidisp_instance_count--; // Removed
+    return ENOMEM;
+  }
+
+  err = mutex_alloc(&st->lock);
+  if (err) {
+    // vidisp_instance_count--; // Removed
+    mem_deref(st);
+    return err;
+  }
+
+  mtx_lock(vidisp_list_lock);
+  list_append(&vidisp_list, &st->le, st);
+  mtx_unlock(vidisp_list_lock);
+
+  st->is_local = is_local;
+  *stp = st;
+  return 0;
+}
+
+static int sdl_vidisp_update(struct vidisp_st *st, bool fullscreen, int orient,
+                             const struct vidrect *window) {
+  (void)fullscreen;
+  (void)window;
+  if (!st)
+    return EINVAL;
+  st->orientation = orient;
+  return 0;
+}
+
+static int sdl_vidisp_disp(struct vidisp_st *st, const char *title,
+                           const struct vidframe *frame, uint64_t timestamp) {
+  (void)title;
+  (void)timestamp;
+  if (!st || !frame)
+    return EINVAL;
+
+  mtx_lock(st->lock);
+
+  // Check if size changed
+  if (!st->frame || !vidsz_cmp(&st->size, &frame->size) ||
+      st->frame->fmt != frame->fmt) {
+    if (st->frame)
+      mem_deref(st->frame);
+    st->frame = NULL;
+    st->size = frame->size;
+    int err = vidframe_alloc(&st->frame, frame->fmt, &frame->size);
+    if (err) {
+      mtx_unlock(st->lock);
+      return err;
+    }
+  }
+
+  // Copy frame data
+  vidframe_copy(st->frame, frame);
+  st->new_frame = true;
+
+  mtx_unlock(st->lock);
+
+  log_debug("BaresipManager", "sdl_vidisp_disp: Frame received (fmt=%d, %dx%d)",
+            frame->fmt, frame->size.w, frame->size.h);
+
+  // Trigger SDL refresh
+  SDL_Event event;
+  event.type = SDL_WINDOWEVENT;
+  event.window.event = SDL_WINDOWEVENT_EXPOSED;
+  // Push event is thread safe in SDL2
+  SDL_PushEvent(&event);
+
+  return 0;
+}
+
+static void sdl_vidisp_hide(struct vidisp_st *st) { (void)st; }
+
+static SDL_Rect g_video_rect = {0, 0, 0, 0};
+static SDL_Rect g_local_video_rect = {0, 0, 0, 0};
+
+// Video Display Module Pointers - Moved to Global Scope
+
+static Uint32 vidfmt_to_sdl(enum vidfmt fmt) {
+  switch (fmt) {
+  case VID_FMT_YUV420P:
+    return SDL_PIXELFORMAT_IYUV;
+  case VID_FMT_YUYV422:
+    return SDL_PIXELFORMAT_YUY2;
+  case VID_FMT_UYVY422:
+    return SDL_PIXELFORMAT_UYVY;
+  case VID_FMT_RGB32:
+    return SDL_PIXELFORMAT_ARGB8888;
+  default:
+    return SDL_PIXELFORMAT_UNKNOWN;
+  }
+}
+
+void baresip_manager_set_video_rect(int x, int y, int w, int h) {
+  g_video_rect.x = x;
+  g_video_rect.y = y;
+  g_video_rect.w = w;
+  g_video_rect.h = h;
+}
+
+void baresip_manager_set_local_video_rect(int x, int y, int w, int h) {
+  g_local_video_rect.x = x;
+  g_local_video_rect.y = y;
+  g_local_video_rect.w = w;
+  g_local_video_rect.h = h;
+}
+
+// Render Callback (Runs in Main Thread)
+static void sdl_vid_render(void *renderer_ptr) {
+  static int entry_log = 0;
+  if (entry_log++ % 60 == 0)
+    fprintf(stderr, "sdl_vid_render: Entry\n");
+  SDL_Renderer *renderer = (SDL_Renderer *)renderer_ptr;
+
+  if (!vidisp_list_lock)
+    return;
+
+  mtx_lock(vidisp_list_lock);
+
+  // Pass 1: Remote Video (Background)
+  struct le *le;
+  for (le = vidisp_list.head; le; le = le->next) {
+    struct vidisp_st *st = le->data;
+    // 1. Create/Recreate Texture if needed
+    if (st->frame && st->size.w > 0 && st->size.h > 0) {
+      bool create = !st->texture;
+      Uint32 format = vidfmt_to_sdl(st->frame->fmt);
+      if (format == SDL_PIXELFORMAT_UNKNOWN) {
+        log_warn("BaresipManager", "Unknown/Unsupported video format: %d",
+                 st->frame->fmt);
+        format = SDL_PIXELFORMAT_IYUV; // Try fallback
+      }
+
+      if (st->texture) {
+        int w, h;
+        Uint32 existing_fmt;
+        SDL_QueryTexture(st->texture, &existing_fmt, NULL, &w, &h);
+        if (w != st->size.w || h != st->size.h || existing_fmt != format) {
+          SDL_DestroyTexture(st->texture);
+          st->texture = NULL;
+          create = true;
+        }
+      }
+
+      if (create) {
+        st->texture =
+            SDL_CreateTexture(renderer, format, SDL_TEXTUREACCESS_STREAMING,
+                              st->size.w, st->size.h);
+        if (!st->texture) {
+          log_warn("BaresipManager", "Failed to create SDL texture: %s",
+                   SDL_GetError());
+        } else {
+          log_info("BaresipManager", "Created SDL Texture %dx%d (fmt=%d)",
+                   st->size.w, st->size.h, st->frame->fmt);
+        }
+      }
+    }
+
+    // 2. Update Texture if new frame
+    if (st->texture && st->new_frame && st->frame) {
+      if (st->frame->fmt == VID_FMT_YUV420P) {
+        SDL_UpdateYUVTexture(st->texture, NULL, st->frame->data[0],
+                             st->frame->linesize[0], st->frame->data[1],
+                             st->frame->linesize[1], st->frame->data[2],
+                             st->frame->linesize[2]);
+      } else {
+        // Generic update for packed formats (RGB, YUYV, etc.)
+        SDL_UpdateTexture(st->texture, NULL, st->frame->data[0],
+                          st->frame->linesize[0]);
+      }
+      st->new_frame = false;
+    }
+
+    // 3. Render Remote Video (Skip if local - rendered in Pass 2)
+    if (!st->is_local && st->texture && g_video_rect.w > 0 &&
+        g_video_rect.h > 0) {
+      SDL_Rect target_rect = g_video_rect; // Default to full fill
+
+      // Aspect Fit Logic
+      if (st->size.w > 0 && st->size.h > 0) {
+        float src_ratio = (float)st->size.w / (float)st->size.h;
+        float dst_ratio = (float)g_video_rect.w / (float)g_video_rect.h;
+
+        if (src_ratio > dst_ratio) {
+          // Source is wider than dest: Fit Width
+          target_rect.w = g_video_rect.w;
+          target_rect.h = (int)((float)g_video_rect.w / src_ratio);
+          target_rect.x = g_video_rect.x;
+          target_rect.y = g_video_rect.y + (g_video_rect.h - target_rect.h) / 2;
+        } else {
+          // Source is taller than dest: Fit Height
+          target_rect.h = g_video_rect.h;
+          target_rect.w = (int)((float)g_video_rect.h * src_ratio);
+          target_rect.y = g_video_rect.y;
+          target_rect.x = g_video_rect.x + (g_video_rect.w - target_rect.w) / 2;
+        }
+      }
+
+      // Logging
+      static int log_div = 0;
+      if (log_div++ % 60 == 0) {
+        fprintf(stderr, "RENDER_REMOTE_EXEC: Target=%d,%d %dx%d (Src %dx%d)\n",
+                target_rect.x, target_rect.y, target_rect.w, target_rect.h,
+                st->size.w, st->size.h);
+      }
+
+      // Render (No Clip needed for Aspect Fit usually, but keeps it clean)
+      // Draw Black Background first?
+      // SDL_RenderFillRect with black? The layer is already black/transparent.
+
+      int ret = SDL_RenderCopy(renderer, st->texture, NULL, &target_rect);
+      if (ret != 0) {
+        log_warn("BaresipManager", "SDL_RenderCopy failed: %s", SDL_GetError());
+      }
+    }
+
+    mtx_unlock(st->lock);
+  }
+
+  // Pass 2: Local Video (Overlay)
+  int local_count = 0;
+  for (le = vidisp_list.head; le; le = le->next) {
+    struct vidisp_st *st = le->data;
+    if (!st->is_local)
+      continue;
+
+    local_count++;
+    mtx_lock(st->lock);
+    if (st->texture) {
+      SDL_Rect *dest = NULL;
+      if (g_local_video_rect.w > 0 && g_local_video_rect.h > 0) {
+        dest = &g_local_video_rect;
+      }
+
+      // Throttle logs
+      static int log_div_loc = 0;
+      if (log_div_loc++ % 60 == 0) {
+        fprintf(stderr,
+                "sdl_vid_render: Local Stream found. Rect: %d,%d %dx%d. "
+                "Texture: %p\n",
+                g_local_video_rect.x, g_local_video_rect.y,
+                g_local_video_rect.w, g_local_video_rect.h,
+                (void *)st->texture);
+      }
+
+      if (dest) {
+        SDL_RenderCopy(renderer, st->texture, NULL, dest);
+      } else {
+        if (log_div_loc % 60 == 0)
+          fprintf(stderr,
+                  "sdl_vid_render: Local video SKIPPED (Invalid Rect)\n");
+      }
+    } else {
+      static int log_no_tex = 0;
+      if (log_no_tex++ % 60 == 0)
+        fprintf(stderr, "sdl_vid_render: Local video has NO TEXTURE\n");
+    }
+    mtx_unlock(st->lock);
+  }
+
+  static int log_lc = 0;
+  if (log_lc++ % 60 == 0 && local_count == 0) {
+    fprintf(stderr, "sdl_vid_render: NO LOCAL VIDEO STREAMS FOUND in list!\n");
+  }
+
+  mtx_unlock(vidisp_list_lock);
+}
+
+// Helper to access module functions
+struct vidisp *baresip_manager_vidisp(void) {
+  static struct vidisp vd = {
+      .name = "sdl_vidisp",
+      .alloch = sdl_vidisp_alloc,
+      .updateh = sdl_vidisp_update,
+      .disph = sdl_vidisp_disp,
+      .hideh = sdl_vidisp_hide,
+  };
+  return &vd;
+}
+
 // Create default configuration file
 static void create_default_config(const char *config_path) {
   FILE *f = fopen(config_path, "w");
   if (f) {
     fprintf(f, "# Minimal Baresip Config\n"
                "poll_method\t\tpoll\n"
-               "sip_listen\t\t0.0.0.0:5060\n"
+               "sip_listen\t\t0.0.0.0:0\n"
                "sip_transports\t\tudp,tcp\n"
                "audio_path\t\t/usr/share/baresip\n"
                "# Modules\n"
@@ -476,9 +823,12 @@ static void create_default_config(const char *config_path) {
                "audio_source\t\tsdl,nil\n"
                "audio_alert\t\tsdl,nil\n"
 #endif
-               "# Video\n"
-               "video_source\t\tsdl,nil\n"
-               "video_display\t\tsdl,nil\n"
+#ifdef __APPLE__
+               "video_source\t\tfakevideo\n"
+#else
+               "video_source\t\tdummy,nil\n" // Use dummy or v4l2 if available
+#endif
+               "video_display\t\tsdl_vidisp,nil\n"
                "# Connect\n"
                "sip_verify_server\tyes\n"
                "answer_mode\t\tmanual\n"
@@ -493,6 +843,7 @@ static void create_default_config(const char *config_path) {
                "module_load\t\taudiounit.so\n"
                "module_load\t\tavcapture.so\n"
                "module_load\t\tcoreaudio.so\n"
+               "module_load\t\tselfview.so\n"
 #endif
                "module_load\t\topus.so\n"
                "# Network Modules\n"
@@ -502,6 +853,8 @@ static void create_default_config(const char *config_path) {
                "module_load\t\tstun.so\n"
                "module_load\t\tturn.so\n"
                "module_load\t\toutbound.so\n"
+               "# Selfview\n"
+               "video_selfview\t\twindow\n"
                "# Keepalive\n"
                "sip_keepalive_interval\t15\n");
     fclose(f);
@@ -529,9 +882,9 @@ static void check_and_fix_audio_config(const char *config_path) {
     // Simple string replacement approach for this specific issue
     // We will just rewrite the default config if we detect the broken one,
     // or we can try to replace.
-    // safer to just append the override to the end, Baresip might use the last
-    // one? No, Baresip usually uses the first or last, unpredictable. Better to
-    // rewrite.
+    // safer to just append the override to the end, Baresip might use the
+    // last one? No, Baresip usually uses the first or last, unpredictable.
+    // Better to rewrite.
 
     // Let's use a simple approach: if we see 'sdl', we assume it's the broken
     // default config and overwrite it.
@@ -560,17 +913,63 @@ static void check_and_append_keepalive(const char *config_path) {
   if (!has_keepalive) {
     FILE *f_append = fopen(config_path, "a");
     if (f_append) {
-      fprintf(f_append,
-              "\n# Keepalive (Auto-added)\nsip_keepalive_interval\t15\n");
+      fprintf(f_append, "\n# Keepalive\nsip_keepalive_interval\t15\n");
       fclose(f_append);
-      log_info("BaresipManager",
-               "Added sip_keepalive_interval (15s) to existing config");
+      log_info("BaresipManager", "Appended missing keepalive config");
     }
   }
+
+  // Check for video_selfview
+  bool has_selfview = false;
+  f_check_ka = fopen(config_path, "r");
+  if (f_check_ka) {
+    char line[256];
+    while (fgets(line, sizeof(line), f_check_ka)) {
+      if (strstr(line, "video_selfview")) {
+        has_selfview = true;
+        break;
+      }
+    }
+    fclose(f_check_ka);
+  }
+
+  if (!has_selfview) {
+    FILE *f_append = fopen(config_path, "a");
+    if (f_append) {
+      fprintf(f_append, "\n# Selfview\nvideo_selfview\t\twindow\n");
+      fclose(f_append);
+      log_info("BaresipManager",
+               "Appended missing video_selfview config (window)");
+    }
+  }
+
+  // Enforce avcapture on macOS (simple check)
+#ifdef __APPLE__
+  // Logic to replace video_source fakevideo with avcapture if found?
+  // For now, let's rely on create_default checks or just warn.
+  // The baresip_init code forces cfg->video.src_mod anyway if we use my
+  // previous edit. Wait, I removed the programmatic force? No, I updated it. I
+  // will rely on the programmatic update I made in step 140 (which was
+  // successful in content, just conf_set failed). So config file check is
+  // backup.
+#endif
+}
+
+// Test harness for video verification
+static struct tmr test_video_tmr;
+static void test_video_call_cb(void *arg) {
+  (void)arg;
+  log_info("BaresipManager", ">>> AUTO-STARTING VIDEO CALL TEST to 808086 <<<");
+  baresip_manager_videocall("808082");
 }
 
 // Initialize Baresip
 int baresip_manager_init(void) {
+  static bool g_initialized = false;
+  if (g_initialized)
+    return 0;
+  g_initialized = true;
+
   int err;
 
   log_info("BaresipManager", "Initializing...");
@@ -660,13 +1059,91 @@ int baresip_manager_init(void) {
       "Audio tuning applied: Device=[100-300ms], Network(AVT)=[100-500ms]");
 #endif
 
-  // Initialize Baresip core
+  // Video
+  // Default to avcapture on Apple, v4l2 on Linux if not set
+  if (strlen(cfg->video.src_mod) == 0) {
+#ifdef __APPLE__
+    re_snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "avcapture");
+#else
+    re_snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "v4l2");
+#endif
+  }
+
+  // Ensure we use our custom display module
+  re_snprintf(cfg->video.disp_mod, sizeof(cfg->video.disp_mod), "sdl_vidisp");
+  cfg->video.enc_fmt = VID_FMT_YUV420P;
+
+  // Initialize Baresip core (Must be FIRST to init lists)
   err = baresip_init(cfg);
   if (err) {
     log_error("BaresipManager", "Failed to initialize baresip: %d", err);
     libre_close();
     return err;
   }
+
+  // --- Register Static Modules ---
+  struct mod *m = NULL;
+
+  // Audio Codecs
+  extern const struct mod_export exports_opus;
+  extern const struct mod_export exports_g711;
+  mod_add(&m, &exports_opus);
+  mod_add(&m, &exports_g711);
+
+  // Audio Driver
+#ifdef __APPLE__
+  extern const struct mod_export exports_audiounit;
+  mod_add(&m, &exports_audiounit);
+#endif
+
+  // Video Codecs & Formats
+  extern const struct mod_export exports_avcodec;
+  extern const struct mod_export exports_avformat;
+  extern const struct mod_export exports_swscale;
+
+  mod_add(&m, &exports_avcodec);
+  mod_add(&m, &exports_avformat);
+  mod_add(&m, &exports_swscale);
+
+  // Video Display
+  extern const struct mod_export exports_sdl_vidisp;
+  // extern const struct mod_export exports_window; // CONFLICT: we handle
+  // 'window' alias in sdl_vidisp_init
+
+  err = mod_add(&m, &exports_sdl_vidisp);
+  if (err)
+    log_warn("BaresipManager", "mod_add(sdl_vidisp) failed: %d", err);
+  else
+    log_info("BaresipManager", "mod_add(sdl_vidisp) success");
+
+  // Video Sources
+  extern const struct mod_export exports_fakevideo;
+  mod_add(&m, &exports_fakevideo);
+
+#ifdef __APPLE__
+  extern const struct mod_export exports_avcapture;
+  mod_add(&m, &exports_avcapture);
+#endif
+
+  // Register selfview module to enable local video looping
+  extern const struct mod_export exports_selfview;
+  mod_add(&m, &exports_selfview);
+
+  // mod_add(&m, &exports_window); // DISABLE STANDARD WINDOW MODULE
+
+  sdl_set_background_draw_cb(sdl_vid_render); // Hook renderer
+
+  // NAT Traversal
+  extern const struct mod_export exports_stun;
+  extern const struct mod_export exports_turn;
+  extern const struct mod_export exports_ice;
+
+  mod_add(&m, &exports_stun);
+  mod_add(&m, &exports_turn);
+  mod_add(&m, &exports_ice);
+
+  log_info("BaresipManager",
+           "Modules registered. Forced video display to 'sdl_vidisp'");
 
   // Initialize User Agents
   err = ua_init("baresip-lvgl", true, true, true);
@@ -677,7 +1154,7 @@ int baresip_manager_init(void) {
     return err;
   }
 
-  // Manually enable transports (missing modules workaround)
+  // Manually enable transports
   struct sa laddr_any;
   sa_init(&laddr_any, AF_INET);
 
@@ -686,45 +1163,13 @@ int baresip_manager_init(void) {
   if (err)
     log_warn("BaresipManager", "Failed to add UDP transport: %d", err);
 
-  log_info("BaresipManager", "Manually adding TCP transport...");
-  err = sip_transp_add(uag_sip(), SIP_TRANSP_TCP, &laddr_any);
-  if (err)
-    log_warn("BaresipManager", "Failed to add TCP transport: %d", err);
-
-  // Static Module Registration (Direct init calls)
-  log_info("BaresipManager", "Registering static modules...");
-  if (exports_g711.init)
-    exports_g711.init();
-  if (exports_opus.init)
-    exports_opus.init();
-  if (exports_account.init)
-    exports_account.init();
-  if (exports_stun.init)
-    exports_stun.init();
-  if (exports_turn.init)
-    exports_turn.init();
-
-  // WebRTC AEC not available (verified via nm), strictly using AudioUnit
-
-#ifdef __APPLE__
-  if (exports_audiounit.init)
-    exports_audiounit.init();
-  if (exports_coreaudio.init)
-    exports_coreaudio.init();
-#endif
-
-  // Manual UUID generation if outbound needed it
-  if (cfg) {
-    if (!str_isset(cfg->sip.uuid)) {
-      log_info("BaresipManager", "Generating missing UUID...");
-      snprintf(cfg->sip.uuid, sizeof(cfg->sip.uuid),
-               "%08x-%04x-%04x-%04x-%08x%04x", rand(), rand() & 0xFFFF,
-               rand() & 0xFFFF, rand() & 0xFFFF, rand(), rand() & 0xFFFF);
-    }
-    log_info("BaresipManager", "Using UUID: %s", cfg->sip.uuid);
+  // Generate UUID if missing
+  if (cfg && !str_isset(cfg->sip.uuid)) {
+    log_info("BaresipManager", "Generating missing UUID...");
+    snprintf(cfg->sip.uuid, sizeof(cfg->sip.uuid),
+             "%08x-%04x-%04x-%04x-%08x%04x", rand(), rand() & 0xFFFF,
+             rand() & 0xFFFF, rand() & 0xFFFF, rand(), rand() & 0xFFFF);
   }
-
-  log_info("BaresipManager", "Modules registered.");
 
   // Debug: Print network interfaces
   log_debug("BaresipManager", "--- Network Interface Debug ---");
@@ -734,9 +1179,83 @@ int baresip_manager_init(void) {
   // Register event handler
   bevent_register(call_event_handler, NULL);
 
+  if (!vidisp_list_lock) {
+    mutex_alloc(&vidisp_list_lock);
+  }
+
   log_info("BaresipManager", "Initialization complete");
   return 0;
 }
+
+static int sdl_vidisp_init(void) {
+  int err = 0;
+  if (!vid) {
+    err =
+        vidisp_register(&vid, baresip_vidispl(), "sdl_vidisp", sdl_vidisp_alloc,
+                        sdl_vidisp_update, sdl_vidisp_disp, sdl_vidisp_hide);
+    if (err) {
+      log_warn("BaresipManager", "Failed to register sdl_vidisp: %d", err);
+      return err;
+    } else {
+      log_info("BaresipManager", "Registered sdl_vidisp module");
+    }
+  }
+
+  // Also register 'window' alias for selfview
+  if (!vid2) {
+    err = vidisp_register(&vid2, baresip_vidispl(), "window", sdl_vidisp_alloc,
+                          sdl_vidisp_update, sdl_vidisp_disp, sdl_vidisp_hide);
+    if (err) {
+      log_warn("BaresipManager", "Failed to register window alias: %d", err);
+    } else {
+      log_info("BaresipManager",
+               "Registered window alias for local video (inside sdl_vidisp)");
+    }
+  }
+  return err;
+}
+
+static int sdl_vidisp_close(void) {
+  vid = mem_deref(vid);
+  return 0;
+}
+
+const struct mod_export exports_sdl_vidisp = {
+    "sdl_vidisp",
+    "vidisp",
+    sdl_vidisp_init,
+    sdl_vidisp_close,
+};
+
+static int window_init(void) {
+  if (vid2)
+    return 0;
+  int err =
+      vidisp_register(&vid2, baresip_vidispl(), "window", sdl_vidisp_alloc,
+                      sdl_vidisp_update, sdl_vidisp_disp, sdl_vidisp_hide);
+  if (err) {
+    fprintf(stderr, "BaresipManager: Failed to register window alias: %d\n",
+            err);
+    log_warn("BaresipManager", "Failed to register window alias: %d", err);
+  } else {
+    fprintf(stderr,
+            "BaresipManager: Registered window alias for local video\n");
+    log_info("BaresipManager", "Registered window alias for local video");
+  }
+  return err;
+}
+
+static int window_close(void) {
+  vid2 = mem_deref(vid2);
+  return 0;
+}
+
+const struct mod_export exports_window = {
+    "window",
+    "vidisp",
+    window_init,
+    window_close,
+};
 
 void baresip_manager_set_callback(call_event_cb cb) {
   g_call_state.callback = cb;
@@ -753,8 +1272,9 @@ reg_status_t baresip_manager_get_account_status(const char *aor) {
   return acc ? acc->status : REG_STATUS_NONE;
 }
 
-int baresip_manager_call_with_account(const char *uri,
-                                      const char *account_aor) {
+// Internal helper for making calls
+static int baresip_manager_connect(const char *uri, const char *account_aor,
+                                   bool video) {
   struct ua *ua = NULL;
   int err;
   char full_uri[256];
@@ -762,23 +1282,41 @@ int baresip_manager_call_with_account(const char *uri,
   if (!uri)
     return -1;
 
-  log_info("BaresipManager", "Making call to: %s (Account: %s)", uri,
+  log_info("BaresipManager", "Making %s call to: %s (Account: %s)",
+           video ? "VIDEO" : "AUDIO", uri,
            account_aor ? account_aor : "Default");
+
+  //  // DEBUG UA LIST
+  struct list *ual = uag_list();
+  log_info("BaresipManager",
+           "Connect: Request to %s using Account %s (UA Count: %d)", uri,
+           account_aor ? account_aor : "Default", list_count(ual));
+
+  struct le *le_debug = list_head(ual);
+  while (le_debug) {
+    struct ua *u = le_debug->data;
+    log_info("BaresipManager", "  - UA Available: %p", (void *)u);
+    le_debug = le_debug->next;
+  }
 
   // Select User Agent
   if (account_aor) {
     ua = uag_find_aor(account_aor);
     if (!ua) {
-      log_warn("BaresipManager",
-               "Account %s not found, falling back to default UA", account_aor);
-      ua = uag_find_aor(NULL);
+      log_warn("BaresipManager", "Account %s not found, attempting defaults...",
+               account_aor);
     }
-  } else {
-    ua = uag_find_aor(NULL);
   }
 
   if (!ua) {
-    log_warn("BaresipManager", "No user agent available");
+    // Try first in list (Fallback since uag_current is not public/available)
+    struct le *le = list_head(uag_list());
+    if (le)
+      ua = le->data;
+  }
+
+  if (!ua) {
+    log_warn("BaresipManager", "No user agent available - Cannot connect");
     return -1;
   }
 
@@ -816,7 +1354,8 @@ int baresip_manager_call_with_account(const char *uri,
            full_uri, (void *)ua);
 
   struct call *call = NULL;
-  err = ua_connect(ua, &call, NULL, full_uri, VIDMODE_OFF);
+  // Use VIDMODE_ON if video is requested
+  err = ua_connect(ua, &call, NULL, full_uri, video ? VIDMODE_ON : VIDMODE_OFF);
   if (err) {
     log_error("BaresipManager", "Failed to make call: %d", err);
     return err;
@@ -840,13 +1379,25 @@ int baresip_manager_call_with_account(const char *uri,
   return 0;
 }
 
-int baresip_manager_call(const char *uri) {
-  return baresip_manager_call_with_account(uri, NULL);
+int baresip_manager_call_with_account(const char *uri,
+                                      const char *account_aor) {
+  return baresip_manager_connect(uri, account_aor, false);
 }
 
-int baresip_manager_answer(void) {
-  log_info("BaresipManager", "baresip_manager_answer called");
+int baresip_manager_call(const char *uri) {
+  return baresip_manager_connect(uri, NULL, false);
+}
 
+int baresip_manager_videocall_with_account(const char *uri,
+                                           const char *account_aor) {
+  return baresip_manager_connect(uri, account_aor, true);
+}
+
+int baresip_manager_videocall(const char *uri) {
+  return baresip_manager_connect(uri, NULL, true);
+}
+
+int baresip_manager_answer_call(bool video) {
   if (!g_call_state.current_call) {
     log_warn("BaresipManager", "current_call is NULL, trying to find active "
                                "call...");
@@ -873,8 +1424,8 @@ int baresip_manager_answer(void) {
     return -1;
   }
 
-  log_info("BaresipManager", "Answering call %p",
-           (void *)g_call_state.current_call);
+  log_info("BaresipManager", "Answering call %p (Video=%d)",
+           (void *)g_call_state.current_call, video);
 
   // Hold other calls first
   for (int i = 0; i < MAX_CALLS; i++) {
@@ -886,7 +1437,8 @@ int baresip_manager_answer(void) {
     }
   }
 
-  int err = call_answer(g_call_state.current_call, 200, VIDMODE_OFF);
+  int err = call_answer(g_call_state.current_call, 200,
+                        video ? VIDMODE_ON : VIDMODE_OFF);
   if (err) {
     log_error("BaresipManager", "Failed to answer call: %d", err);
     return err;
@@ -901,6 +1453,14 @@ int baresip_manager_answer(void) {
                           (void *)g_call_state.current_call);
   }
 
+  return 0;
+}
+
+int baresip_manager_reject_call(void *call_ptr) {
+  if (!call_ptr)
+    return -1;
+  log_info("BaresipManager", "Rejecting specific call %p", call_ptr);
+  call_hangup((struct call *)call_ptr, 486, "Busy Here");
   return 0;
 }
 
@@ -963,6 +1523,19 @@ static void loop_timeout_cb(void *arg) {
 }
 
 void baresip_manager_loop(void (*ui_cb)(void), int interval_ms) {
+  int err;
+
+  // --- INITIALIZATION START ---
+  // Initialize manager (accounts, ua, etc.)
+  // This function is now GUARDED and handles all init (libre, config, baresip)
+  err = baresip_manager_init();
+  if (err) {
+    log_error("BaresipManager", "baresip_manager_init failed: %d", err);
+    goto cleanup;
+  }
+  // --- INITIALIZATION END ---
+
+  log_info("BaresipManager", "Starting Main Loop...");
   tmr_init(&g_loop_tmr);
 
   while (true) {
@@ -973,15 +1546,25 @@ void baresip_manager_loop(void (*ui_cb)(void), int interval_ms) {
     // process events
     int err = re_main(NULL);
     if (err && err != EINTR) {
-      // EINTR is expected from re_cancel
-      if (err != 0)
-        log_warn("BaresipManager", "re_main returned: %d", err);
+      if (err != 0) {
+        // Throttle error logging to avoid spam (e.g. error 22)
+        static int err_count = 0;
+        if (err_count++ % 100 == 0) {
+          log_warn("BaresipManager", "re_main returned: %d (throttling)", err);
+        }
+        usleep(100000); // 100ms delay
+      }
     }
 
     if (ui_cb) {
       ui_cb();
     }
   }
+
+cleanup:
+  log_info("BaresipManager", "Shutdown");
+  baresip_close();
+  libre_close();
 }
 
 bool baresip_manager_is_muted(void) { return g_call_state.muted; }
@@ -993,62 +1576,12 @@ int baresip_manager_add_account(const voip_account_t *acc) {
   if (!acc)
     return EINVAL;
 
-  /* Format: "Display Name" <sip:user:password@domain;transport=udp>;regint=3600
+  /* Format: "Display Name"
+   * <sip:user:password@domain;transport=udp>;regint=3600
    */
   /* Simplified for now: <sip:user:password@domain>;transport=udp */
 
   char transport_param[32] = ";transport=udp";
-
-  // Handle Custom Port
-  char extra_params[512] = {0};
-
-  // Process Audio Codecs
-  if (strlen(acc->audio_codecs) > 0) {
-    char buf[256] = {0};
-    char *dup = strdup(acc->audio_codecs);
-    char *tok = strtok(dup, ",");
-    while (tok) {
-      char *slash = strchr(tok, '/');
-      if (slash)
-        *slash = '\0'; // Truncate at /
-
-      if (strlen(buf) > 0)
-        strcat(buf, ",");
-      strcat(buf, tok);
-      tok = strtok(NULL, ",");
-    }
-    free(dup);
-
-    if (strlen(buf) > 0) {
-      char tmp[300];
-      snprintf(tmp, sizeof(tmp), ";audio_codecs=%s", buf);
-      strcat(extra_params, tmp);
-    }
-  }
-
-  // Process Video Codecs
-  if (strlen(acc->video_codecs) > 0) {
-    char buf[256] = {0};
-    char *dup = strdup(acc->video_codecs);
-    char *tok = strtok(dup, ",");
-    while (tok) {
-      char *slash = strchr(tok, '/');
-      if (slash)
-        *slash = '\0'; // Truncate at /
-
-      if (strlen(buf) > 0)
-        strcat(buf, ",");
-      strcat(buf, tok);
-      tok = strtok(NULL, ",");
-    }
-    free(dup);
-
-    if (strlen(buf) > 0) {
-      char tmp[300];
-      snprintf(tmp, sizeof(tmp), ";video_codecs=%s", buf);
-      strcat(extra_params, tmp);
-    }
-  }
 
   // Handle Custom Port
   char server_with_port[150];
@@ -1075,13 +1608,13 @@ int baresip_manager_add_account(const voip_account_t *acc) {
         (strlen(acc->auth_user) > 0) ? acc->auth_user : acc->username;
 
     snprintf(aor, sizeof(aor),
-             "<sip:%s@%s%s>;auth_pass=%s;auth_user=%s;outbound=%s;regint=600%s",
+             "<sip:%s@%s%s>;auth_pass=%s;auth_user=%s;outbound=%s;regint=600",
              acc->username, server_with_port, transport_param, acc->password,
-             a_user, proxy_buf, extra_params);
+             a_user, proxy_buf);
   } else {
     // Direct Registration
-    snprintf(aor, sizeof(aor), "<sip:%s:%s@%s%s>;regint=3600%s", acc->username,
-             acc->password, server_with_port, transport_param, extra_params);
+    snprintf(aor, sizeof(aor), "<sip:%s:%s@%s%s>;regint=3600", acc->username,
+             acc->password, server_with_port, transport_param);
   }
 
   // Add display name if present
@@ -1127,10 +1660,10 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
 
       if (real_state == CALL_STATE_TERMINATED ||
           g_call_state.active_calls[i].state == CALL_STATE_TERMINATED) {
-        log_warn(
-            "BaresipManager",
-            "Found zombie call %p (TERMINATED) in active list. Cleaning up...",
-            (void *)c);
+        log_warn("BaresipManager",
+                 "Found zombie call %p (TERMINATED) in active list. Cleaning "
+                 "up...",
+                 (void *)c);
         // Force cleanup
         g_call_state.active_calls[i].call = NULL;
         g_call_state.active_calls[i].state = CALL_STATE_IDLE;

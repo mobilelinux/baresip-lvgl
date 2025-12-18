@@ -2,10 +2,16 @@
 #include "applet_manager.h"
 #include "baresip_manager.h"
 #include "call_applet.h"
+#include "config_manager.h"
 #include "contact_manager.h"
 #include "logger.h"
 #include <stdio.h>
 #include <time.h>
+
+// Account Picker State
+static char g_pending_number[128];
+static bool g_pending_is_video = false;
+static lv_obj_t *g_account_picker_modal = NULL;
 
 // Home applet data
 typedef struct {
@@ -14,6 +20,8 @@ typedef struct {
   lv_obj_t *favorites_dock;
   lv_obj_t *in_call_btn;
   lv_obj_t *in_call_label;
+  lv_obj_t *incoming_call_btn;
+  lv_obj_t *incoming_call_label;
   lv_timer_t *clock_timer;
 } home_data_t;
 
@@ -30,35 +38,42 @@ static void update_clock(lv_timer_t *timer) {
 
   lv_label_set_text_fmt(data->clock_label, "%02d:%02d", tm.tm_hour, tm.tm_min);
 
-  // Update In-Call Button Visibility
-  if (data->in_call_btn && data->in_call_label) {
-    call_info_t calls[4];
-    int count = baresip_manager_get_active_calls(calls, 4);
-    bool has_incoming = false;
-    bool has_active = false;
+  // Update Call Status Buttons
+  call_info_t calls[4];
+  int count = baresip_manager_get_active_calls(calls, 4);
+  bool has_incoming = false;
+  bool has_active = false;
 
-    for (int i = 0; i < count; i++) {
-      if (calls[i].state == CALL_STATE_INCOMING) {
-        has_incoming = true;
-      } else if (calls[i].state != CALL_STATE_IDLE &&
-                 calls[i].state != CALL_STATE_TERMINATED) {
-        has_active = true;
+  for (int i = 0; i < count; i++) {
+    if (calls[i].state == CALL_STATE_INCOMING) {
+      has_incoming = true;
+    } else if (calls[i].state != CALL_STATE_IDLE &&
+               calls[i].state != CALL_STATE_TERMINATED) {
+      has_active = true;
+    }
+  }
+
+  // Incoming Call Button (RED)
+  if (data->incoming_call_btn) {
+    if (has_incoming) {
+      if (lv_obj_has_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_clear_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
+      }
+      // Animation could be added here
+    } else {
+      if (!lv_obj_has_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
       }
     }
+  }
 
-    if (has_incoming) {
+  // Active Call Button (GREEN)
+  if (data->in_call_btn) {
+    if (has_active) {
       if (lv_obj_has_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_clear_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
       }
-      lv_obj_set_style_bg_color(data->in_call_btn,
-                                lv_palette_main(LV_PALETTE_RED), 0);
-      lv_label_set_text(data->in_call_label, LV_SYMBOL_CALL " Incoming");
-
-      // Optional: Animate shake? For now just static red
-    } else if (has_active) {
-      if (lv_obj_has_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_clear_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
-      }
+      // Ensure it stays GREEN (since old code might have toggled it)
       lv_obj_set_style_bg_color(data->in_call_btn,
                                 lv_palette_main(LV_PALETTE_GREEN), 0);
       lv_label_set_text(data->in_call_label, LV_SYMBOL_CALL " In Call");
@@ -71,24 +86,200 @@ static void update_clock(lv_timer_t *timer) {
 }
 
 // Handle click on In-Call button
+// Handle click on In-Call button
 static void in_call_clicked(lv_event_t *e) {
   (void)e;
-  // User explicitly clicked the "In Call" status button, so show the active
-  // call screen
+  log_info("HomeApplet",
+           "Green 'In Call' button clicked -> Request Active View");
   call_applet_request_active_view();
   applet_manager_launch_applet(&call_applet);
 }
 
-// Handle click on favorite contact
-static void favorite_clicked(lv_event_t *e) {
-  (void)e; // Unused
-  const char *number = (const char *)lv_event_get_user_data(e);
-  if (number) {
-    if (baresip_manager_call(number) == 0) {
+// Handle click on Incoming Call button
+static void incoming_call_clicked(lv_event_t *e) {
+  (void)e;
+  log_info("HomeApplet",
+           "Red 'Incoming' button clicked -> Request Incoming View");
+  call_applet_request_incoming_view();
+  applet_manager_launch_applet(&call_applet);
+}
+
+static void close_picker_modal(void) {
+  if (g_account_picker_modal) {
+    lv_obj_del(g_account_picker_modal);
+    g_account_picker_modal = NULL;
+  }
+}
+
+static void account_picker_cancel(lv_event_t *e) {
+  (void)e;
+  close_picker_modal();
+}
+
+static void account_picker_item_clicked(lv_event_t *e) {
+  intptr_t idx = (intptr_t)lv_event_get_user_data(e);
+  voip_account_t accounts[MAX_ACCOUNTS];
+  int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+
+  if (idx >= 0 && idx < count) {
+    voip_account_t *acc = &accounts[idx];
+    char aor[256];
+    snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+    log_info("HomeApplet", "Picker selected account: %s for %s call to %s", aor,
+             g_pending_is_video ? "Video" : "Audio", g_pending_number);
+
+    int ret;
+    if (g_pending_is_video) {
+      ret = baresip_manager_videocall_with_account(g_pending_number, aor);
+    } else {
+      ret = baresip_manager_call_with_account(g_pending_number, aor);
+    }
+
+    if (ret == 0) {
       call_applet_request_active_view();
       applet_manager_launch_applet(&call_applet);
     }
   }
+  close_picker_modal();
+}
+
+static void show_account_picker(const char *number, bool is_video) {
+  if (!number)
+    return;
+
+  strncpy(g_pending_number, number, sizeof(g_pending_number) - 1);
+  g_pending_is_video = is_video;
+
+  if (g_account_picker_modal) {
+    lv_obj_del(g_account_picker_modal);
+  }
+
+  // Create Modal Background (Dimmed)
+  lv_obj_t *screen = lv_scr_act();
+  g_account_picker_modal = lv_obj_create(screen);
+  lv_obj_set_size(g_account_picker_modal, LV_PCT(100),
+                  LV_PCT(100)); // Full Screen Overlay
+  lv_obj_set_style_bg_color(g_account_picker_modal, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(g_account_picker_modal, LV_OPA_50, 0);
+  lv_obj_set_style_border_width(g_account_picker_modal, 0, 0);
+  lv_obj_clear_flag(g_account_picker_modal, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Create Card
+  lv_obj_t *card = lv_obj_create(g_account_picker_modal);
+  lv_obj_set_width(card, 500); // Or PCT(80) but maxed?
+  lv_obj_set_height(card, LV_SIZE_CONTENT);
+  lv_obj_center(card);
+  lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(card, 20, 0);
+  lv_obj_set_style_radius(card, 10, 0);
+
+  // Title
+  lv_obj_t *title = lv_label_create(card);
+  lv_label_set_text(title, "Choose Account");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_style_pad_bottom(title, 20, 0);
+  lv_obj_set_style_pad_gap(card, 15, 0); // Gap between buttons
+
+  // Load accounts
+  voip_account_t accounts[MAX_ACCOUNTS];
+  int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+
+  for (int i = 0; i < count; i++) {
+    if (!accounts[i].enabled)
+      continue;
+
+    lv_obj_t *btn = lv_btn_create(card);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, 60);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2196F3), 0); // Blue
+    lv_obj_set_style_radius(btn, 10, 0);
+
+    // Pass INDEX as user_data (intptr_t)
+    lv_obj_add_event_cb(btn, account_picker_item_clicked, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)i);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    // Format: "97one (fanvil.com)"
+    char label_text[256];
+    snprintf(label_text, sizeof(label_text), "%s (%s)",
+             (strlen(accounts[i].display_name) > 0 ? accounts[i].display_name
+                                                   : accounts[i].username),
+             accounts[i].server);
+
+    lv_label_set_text(lbl, label_text);
+    lv_obj_center(lbl);
+  }
+
+  // Cancel Button (Red)
+  lv_obj_t *cancel_btn = lv_btn_create(card);
+  lv_obj_set_width(cancel_btn, LV_PCT(100));
+  lv_obj_set_height(cancel_btn, 60);
+  lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0xF44336), 0); // Red
+  lv_obj_set_style_radius(cancel_btn, 10, 0);
+  lv_obj_add_event_cb(cancel_btn, account_picker_cancel, LV_EVENT_CLICKED,
+                      NULL);
+
+  lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
+  lv_label_set_text(cancel_lbl, "Cancel");
+  lv_obj_center(cancel_lbl);
+}
+
+// Helper to handle call click
+static void handle_call_click(const char *number, bool is_video) {
+  if (!number)
+    return;
+
+  app_config_t config;
+  config_load_app_settings(&config);
+  log_info("HomeApplet", "handle_call_click: Number=%s, Video=%d, DefAcc=%d",
+           number, is_video, config.default_account_index);
+
+  int ret = -1;
+
+  if (config.default_account_index >= 0) {
+    voip_account_t accounts[MAX_ACCOUNTS];
+    int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+    if (config.default_account_index < count) {
+      char aor[256];
+      voip_account_t *acc = &accounts[config.default_account_index];
+      snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+      if (is_video)
+        ret = baresip_manager_videocall_with_account(number, aor);
+      else
+        ret = baresip_manager_call_with_account(number, aor);
+    } else {
+      log_warn("HomeApplet",
+               "Default account index %d out of range (count=%d). Showing "
+               "picker.",
+               config.default_account_index, count);
+      // Treat invalid index as "Always Ask"
+      show_account_picker(number, is_video);
+      return; // Exit after showing picker
+    }
+  } else {
+    // Show Picker
+    log_info("HomeApplet", "Default account is %d (Always Ask), showing picker",
+             config.default_account_index);
+    show_account_picker(number, is_video);
+    return;
+  }
+
+  if (ret == 0) {
+    call_applet_request_active_view();
+    applet_manager_launch_applet(&call_applet);
+  }
+}
+
+// Handle click on favorite contact
+static void favorite_audio_clicked(lv_event_t *e) {
+  const char *number = (const char *)lv_event_get_user_data(e);
+  handle_call_click(number, false);
+}
+
+static void favorite_video_clicked(lv_event_t *e) {
+  const char *number = (const char *)lv_event_get_user_data(e);
+  handle_call_click(number, true);
 }
 
 // Populate the favorites dock
@@ -109,20 +300,54 @@ static void populate_favorites(home_data_t *data) {
 
     found_any = true;
 
-    lv_obj_t *btn = lv_btn_create(data->favorites_dock);
-    lv_obj_set_size(btn, 60, 60);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_size(btn, 60, 60);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_add_flag(
-        btn, LV_OBJ_FLAG_EVENT_BUBBLE); // Enable bubbling for key handling
-    lv_obj_add_event_cb(btn, favorite_clicked, LV_EVENT_CLICKED,
+    found_any = true;
+
+    // Container for each favorite
+    lv_obj_t *fav_item = lv_obj_create(data->favorites_dock);
+    lv_obj_set_size(fav_item, LV_PCT(100), 50);
+    lv_obj_set_style_bg_opa(fav_item, LV_OPA_20, 0); // Slight background
+    lv_obj_set_style_bg_color(fav_item, lv_color_white(), 0);
+    lv_obj_set_style_border_width(fav_item, 0, 0);
+    lv_obj_set_style_radius(fav_item, 5, 0);
+    lv_obj_set_flex_flow(fav_item, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(fav_item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(fav_item, 5, 0);
+    lv_obj_set_style_pad_gap(fav_item, 5, 0);
+    lv_obj_clear_flag(fav_item, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Name Label
+    lv_obj_t *name_lbl = lv_label_create(fav_item);
+    lv_label_set_text(name_lbl, c->name);
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_flex_grow(name_lbl, 1); // Fill available space
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
+
+    // Audio Button
+    lv_obj_t *audio_btn = lv_btn_create(fav_item);
+    lv_obj_set_size(audio_btn, 36, 36);
+    lv_obj_set_style_radius(audio_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(audio_btn, lv_palette_main(LV_PALETTE_GREEN), 0);
+    lv_obj_set_style_pad_all(audio_btn, 0, 0);
+
+    lv_obj_t *audio_icon = lv_label_create(audio_btn);
+    lv_label_set_text(audio_icon, LV_SYMBOL_CALL);
+    lv_obj_center(audio_icon);
+    lv_obj_add_event_cb(audio_btn, favorite_audio_clicked, LV_EVENT_CLICKED,
                         (void *)c->number);
 
-    lv_obj_t *initial = lv_label_create(btn);
-    char init_char[2] = {c->name[0], '\0'};
-    lv_label_set_text(initial, init_char);
-    lv_obj_center(initial);
+    // Video Button
+    lv_obj_t *video_btn = lv_btn_create(fav_item);
+    lv_obj_set_size(video_btn, 36, 36);
+    lv_obj_set_style_radius(video_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(video_btn, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_pad_all(video_btn, 0, 0);
+
+    lv_obj_t *video_icon = lv_label_create(video_btn);
+    lv_label_set_text(video_icon, LV_SYMBOL_VIDEO);
+    lv_obj_center(video_icon);
+    lv_obj_add_event_cb(video_btn, favorite_video_clicked, LV_EVENT_CLICKED,
+                        (void *)c->number);
   }
 
   if (!found_any) {
@@ -187,9 +412,30 @@ static int home_init(applet_t *applet) {
       lv_tileview_add_tile(data->tileview, 0, 0, LV_DIR_RIGHT);
 
   // In-Call Button (Hidden by default)
+  // Incoming Call Button (Hidden by default)
+  data->incoming_call_btn = lv_btn_create(page_home);
+  lv_obj_set_size(data->incoming_call_btn, 120, 60);
+  lv_obj_align(data->incoming_call_btn, LV_ALIGN_TOP_LEFT, 20,
+               20); // Top slot for urgent
+  lv_obj_set_style_bg_color(data->incoming_call_btn,
+                            lv_palette_main(LV_PALETTE_RED), 0);
+  lv_obj_set_style_radius(data->incoming_call_btn, 30, 0);
+  lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+  data->incoming_call_label = lv_label_create(data->incoming_call_btn);
+  lv_label_set_text(data->incoming_call_label, LV_SYMBOL_CALL " Incoming");
+  lv_obj_set_style_text_font(data->incoming_call_label, &lv_font_montserrat_16,
+                             0);
+  lv_obj_center(data->incoming_call_label);
+
+  lv_obj_add_event_cb(data->incoming_call_btn, incoming_call_clicked,
+                      LV_EVENT_CLICKED, NULL);
+
+  // Active Call Button (Hidden by default)
   data->in_call_btn = lv_btn_create(page_home);
   lv_obj_set_size(data->in_call_btn, 120, 60);
-  lv_obj_align(data->in_call_btn, LV_ALIGN_TOP_LEFT, 20, 20);
+  lv_obj_align(data->in_call_btn, LV_ALIGN_TOP_LEFT, 20, 90); // Second slot
   lv_obj_set_style_bg_color(data->in_call_btn,
                             lv_palette_main(LV_PALETTE_GREEN), 0);
   lv_obj_set_style_radius(data->in_call_btn, 30, 0);
@@ -207,11 +453,12 @@ static int home_init(applet_t *applet) {
   // Clock
   data->clock_label = lv_label_create(page_home);
   lv_obj_set_style_text_font(data->clock_label, &lv_font_montserrat_48, 0);
-  lv_obj_align(data->clock_label, LV_ALIGN_CENTER, -80, -20);
+  lv_obj_align(data->clock_label, LV_ALIGN_CENTER, -120,
+               -20); // Move left slightly
 
   // Favorites Dock
   data->favorites_dock = lv_obj_create(page_home);
-  lv_obj_set_size(data->favorites_dock, 100, LV_PCT(90));
+  lv_obj_set_size(data->favorites_dock, 250, LV_PCT(90));
   lv_obj_align(data->favorites_dock, LV_ALIGN_RIGHT_MID, -10, 0);
   lv_obj_set_flex_flow(data->favorites_dock, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(data->favorites_dock, LV_FLEX_ALIGN_CENTER,
