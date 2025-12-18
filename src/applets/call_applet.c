@@ -108,6 +108,7 @@ typedef struct {
   bool pending_incoming;
 
   lv_obj_t *account_picker_modal;
+  lv_timer_t *exit_timer; // Timer for delayed exit on call termination
 } call_data_t;
 
 // Global pointer to current applet data for callback
@@ -693,6 +694,17 @@ static void show_active_call_screen(call_data_t *data, const char *number,
   data->is_speaker = false;
   data->is_hold = false;
 
+  // Update Main Area Background: Opaque for Incoming (to cover video),
+  // Transparent for Active
+  if (data->call_main_area) {
+    if (incoming) {
+      lv_obj_set_style_bg_opa(data->call_main_area, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(data->call_main_area, lv_color_black(), 0);
+    } else {
+      lv_obj_set_style_bg_opa(data->call_main_area, LV_OPA_TRANSP, 0);
+    }
+  }
+
   if (data->call_number_label) {
     char formatted_number[256];
     format_sip_uri(number, formatted_number, sizeof(formatted_number));
@@ -748,11 +760,19 @@ static void show_active_call_screen(call_data_t *data, const char *number,
   }
 
   // Video Visibility Logic
+  bool show_video = data->pending_video;
   if (data->video_cont) {
-    if (data->pending_video) { // reusing pending_video as is_video_call
+    if (show_video) {
       lv_obj_clear_flag(data->video_cont, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(data->video_cont, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (data->video_local) {
+    if (show_video) {
+      lv_obj_clear_flag(data->video_local, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(data->video_local, LV_OBJ_FLAG_HIDDEN);
     }
   }
 
@@ -1761,6 +1781,12 @@ static void update_video_geometry(lv_timer_t *t) {
   }
 }
 
+static void exit_timer_cb(lv_timer_t *t) {
+  call_data_t *data = (call_data_t *)t->user_data;
+  data->exit_timer = NULL;
+  show_dialer_screen(data);
+}
+
 // --- Thread-Safe UI Update Logic ---
 static void check_ui_updates(lv_timer_t *t) {
   call_data_t *data = (call_data_t *)t->user_data;
@@ -1776,7 +1802,15 @@ static void check_ui_updates(lv_timer_t *t) {
            "Processing UI Update: State=%d, Peer='%s', Incoming=%d", state,
            peer, incoming);
 
-  if (state == CALL_STATE_INCOMING) {
+  // Cancel exit timer if we moved out of TERMINATED state (e.g. new call)
+  if (state != CALL_STATE_TERMINATED && data->exit_timer) {
+    lv_timer_del(data->exit_timer);
+    data->exit_timer = NULL;
+  }
+
+  if (state == CALL_STATE_INCOMING ||
+      (incoming && state != CALL_STATE_ESTABLISHED &&
+       state != CALL_STATE_TERMINATED)) {
     if (data->call_status_label)
       lv_label_set_text(data->call_status_label, "Incoming Call...");
     show_active_call_screen(data, peer, true);
@@ -1821,11 +1855,19 @@ static void check_ui_updates(lv_timer_t *t) {
     baresip_manager_set_video_rect(0, 0, 0, 0);
     baresip_manager_set_local_video_rect(0, 0, 0, 0);
 
-    // Return to dialer after delay? or immediately?
-    // For now, immediately show dialer if we were in a call
-    // Or applet manager back?
-    // Existing logic used show_dialer_screen(data);
-    show_dialer_screen(data);
+    // Return to dialer after delay
+    if (!data->exit_timer) {
+      log_info("CallApplet", "Starting exit timer (2s delay)");
+      data->exit_timer = lv_timer_create(exit_timer_cb, 2000, data);
+      lv_timer_set_repeat_count(data->exit_timer, 1);
+    }
+  } else if (state == CALL_STATE_RINGING || state == CALL_STATE_EARLY) {
+    // Outgoing Ringing/Progress
+    if (data->call_status_label)
+      lv_label_set_text(data->call_status_label, (state == CALL_STATE_RINGING)
+                                                     ? "Ringing..."
+                                                     : "Connecting...");
+    show_active_call_screen(data, peer, false);
   }
 }
 
@@ -1861,10 +1903,23 @@ static void on_call_state_change(enum call_state state, const char *peer_uri,
           sizeof(g_call_data->pending_peer_uri) - 1);
 
   // Determine if incoming
-  // Simplification: if state is INCOMING, it is incoming.
-  // Otherwise, we don't know if it WAS incoming, but show_active_call_screen
-  // treats 'incoming' arg as "Is Ringing"
-  g_call_data->pending_incoming = (state == CALL_STATE_INCOMING);
+  // Check direction if call object is available
+  if (state == CALL_STATE_INCOMING) {
+    g_call_data->pending_incoming = true;
+  } else if (call) {
+    // If not explicitly INCOMING state, check if it's an incoming call that
+    // isn't established yet (e.g. Early Media or Ringing on incoming)
+    bool is_outgoing = call_is_outgoing((struct call *)call);
+    if (!is_outgoing && state != CALL_STATE_ESTABLISHED &&
+        state != CALL_STATE_TERMINATED) {
+      g_call_data->pending_incoming = true;
+    } else {
+      g_call_data->pending_incoming = false;
+    }
+  } else {
+    // Fallback if no call obj (shouldn't happen for active calls)
+    g_call_data->pending_incoming = false;
+  }
 
   g_call_data->ui_update_needed = true;
 
@@ -1966,7 +2021,18 @@ static int call_init(applet_t *applet) {
   // Ensure root applet screen is transparent for video
   lv_obj_set_style_bg_opa(applet->screen, 0, 0);
 
-  // Create Main Area
+  // Side List for multiple calls (Created FIRST to be on LEFT)
+  data->call_list_cont = lv_obj_create(active_call_cont);
+  lv_obj_set_width(data->call_list_cont, 220);
+  lv_obj_set_height(data->call_list_cont, LV_PCT(100));
+  lv_obj_set_style_bg_color(data->call_list_cont, lv_color_hex(0x222222), 0);
+  lv_obj_set_flex_flow(data->call_list_cont, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(data->call_list_cont, 5, 0);
+  lv_obj_set_style_border_width(data->call_list_cont, 0, 0);
+  lv_obj_add_flag(data->call_list_cont,
+                  LV_OBJ_FLAG_HIDDEN); // Hidden by default
+
+  // Create Main Area (Created SECOND to be on RIGHT)
   data->call_main_area = lv_obj_create(active_call_cont);
   lv_obj_set_flex_grow(data->call_main_area, 1);
   lv_obj_set_height(data->call_main_area, LV_PCT(100));
@@ -1977,17 +2043,6 @@ static int call_init(applet_t *applet) {
   lv_obj_set_style_bg_opa(data->call_main_area, 0, 0);
   lv_obj_set_style_border_width(data->call_main_area, 0, 0);
   lv_obj_clear_flag(data->call_main_area, LV_OBJ_FLAG_SCROLLABLE);
-
-  // Side List for multiple calls
-  data->call_list_cont = lv_obj_create(active_call_cont);
-  lv_obj_set_width(data->call_list_cont, 220);
-  lv_obj_set_height(data->call_list_cont, LV_PCT(100));
-  lv_obj_set_style_bg_color(data->call_list_cont, lv_color_hex(0x222222), 0);
-  lv_obj_set_flex_flow(data->call_list_cont, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_all(data->call_list_cont, 5, 0);
-  lv_obj_set_style_border_width(data->call_list_cont, 0, 0);
-  lv_obj_add_flag(data->call_list_cont,
-                  LV_OBJ_FLAG_HIDDEN); // Hidden by default
 
   //  // Video Container - Reparented to ROOT SCREEN to avoid layout issues
   data->video_cont = lv_obj_create(data->active_call_screen);
@@ -2011,15 +2066,9 @@ static int call_init(applet_t *applet) {
   lv_obj_set_style_bg_opa(data->video_local, 0, 0);
   lv_obj_set_size(data->video_local, 160, 120);
   lv_obj_align(data->video_local, LV_ALIGN_TOP_RIGHT, -20, 20);
-  lv_obj_set_style_border_color(data->video_local, lv_color_white(), 0);
-  lv_obj_set_style_border_width(data->video_local, 2, 0);
-  lv_obj_set_style_border_side(data->video_local, LV_BORDER_SIDE_FULL, 0);
+  lv_obj_set_style_border_width(data->video_local, 0, 0); // No Border
   lv_obj_move_foreground(
       data->video_local); // Ensure PiP is on top of everything
-
-  lv_obj_t *loc_lbl = lv_label_create(data->video_local);
-  lv_label_set_text(loc_lbl, "Me");
-  lv_obj_center(loc_lbl);
 
   // --- UI Layer (Layer 1, Overlays) ---
   lv_obj_t *ui_layer = lv_obj_create(data->call_main_area);
@@ -2315,14 +2364,28 @@ static void call_start(applet_t *applet) {
     int count = baresip_manager_get_active_calls(calls, 8);
     int target_idx = -1;
 
+    // Priority 1: Find Current Call matching the requested View Mode
     for (int i = 0; i < count; i++) {
-      if (g_req_view_mode == VIEW_MODE_ACTIVE) {
-        if (calls[i].state != CALL_STATE_INCOMING) {
-          target_idx = i;
-          break;
-        }
-      } else if (g_req_view_mode == VIEW_MODE_INCOMING) {
-        if (calls[i].state == CALL_STATE_INCOMING) {
+      bool mode_match = (g_req_view_mode == VIEW_MODE_ACTIVE &&
+                         calls[i].state != CALL_STATE_INCOMING) ||
+                        (g_req_view_mode == VIEW_MODE_INCOMING &&
+                         calls[i].state == CALL_STATE_INCOMING);
+
+      if (mode_match && calls[i].is_current) {
+        target_idx = i;
+        break;
+      }
+    }
+
+    // Priority 2: Fallback to first matching call if no current call found
+    if (target_idx == -1) {
+      for (int i = 0; i < count; i++) {
+        bool mode_match = (g_req_view_mode == VIEW_MODE_ACTIVE &&
+                           calls[i].state != CALL_STATE_INCOMING) ||
+                          (g_req_view_mode == VIEW_MODE_INCOMING &&
+                           calls[i].state == CALL_STATE_INCOMING);
+
+        if (mode_match) {
           target_idx = i;
           break;
         }
@@ -2477,6 +2540,10 @@ static void call_stop(applet_t *applet) {
   if (data && data->ui_poller) {
     lv_timer_del(data->ui_poller);
     data->ui_poller = NULL;
+  }
+  if (data && data->exit_timer) {
+    lv_timer_del(data->exit_timer);
+    data->exit_timer = NULL;
   }
 }
 

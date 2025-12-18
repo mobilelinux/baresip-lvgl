@@ -378,6 +378,22 @@ static void draw_list(void) {
     lv_obj_set_size(video_btn, 40, 40);
     lv_obj_align(video_btn, LV_ALIGN_RIGHT_MID, -45, 0); // Left of Edit
     lv_obj_set_style_bg_opa(video_btn, 0, 0);
+
+    lv_obj_t *audio_btn = lv_btn_create(item);
+    lv_obj_set_size(audio_btn, 40, 40);
+    lv_obj_align(audio_btn, LV_ALIGN_RIGHT_MID, -90, 0); // Left of Video
+    lv_obj_set_style_bg_opa(audio_btn, 0, 0);
+    lv_obj_set_style_shadow_width(audio_btn, 0, 0);
+
+    lv_obj_t *audio_icon = lv_label_create(audio_btn);
+    lv_label_set_text(audio_icon, LV_SYMBOL_CALL);
+    lv_obj_set_style_text_color(audio_icon, lv_palette_main(LV_PALETTE_GREEN),
+                                0);
+    lv_obj_set_style_text_font(audio_icon, &lv_font_montserrat_20, 0);
+    lv_obj_center(audio_icon);
+
+    lv_obj_add_event_cb(audio_btn, contact_item_clicked, LV_EVENT_CLICKED,
+                        (void *)c);
     lv_obj_set_style_shadow_width(video_btn, 0, 0);
 
     lv_obj_t *video_icon = lv_label_create(video_btn);

@@ -696,45 +696,64 @@ static void sdl_vid_render(void *renderer_ptr) {
     }
 
     // 3. Render Remote Video (Skip if local - rendered in Pass 2)
-    if (!st->is_local && st->texture && g_video_rect.w > 0 &&
-        g_video_rect.h > 0) {
-      SDL_Rect target_rect = g_video_rect; // Default to full fill
+    if (!st->is_local) {
+      if (!st->texture) {
+        static int log_no_tex_rem = 0;
+        if (log_no_tex_rem++ % 60 == 0)
+          log_warn("BaresipManager", "Remote video has NO TEXTURE (fmt=%d)",
+                   st->frame ? st->frame->fmt : -1);
+      } else if (g_video_rect.w <= 0 || g_video_rect.h <= 0) {
+        static int log_rect_inv = 0;
+        if (log_rect_inv++ % 60 == 0)
+          log_warn("BaresipManager", "Remote video RECT INVALID: %d,%d %dx%d",
+                   g_video_rect.x, g_video_rect.y, g_video_rect.w,
+                   g_video_rect.h);
+      } else {
+        // Ready to render
 
-      // Aspect Fit Logic
-      if (st->size.w > 0 && st->size.h > 0) {
-        float src_ratio = (float)st->size.w / (float)st->size.h;
-        float dst_ratio = (float)g_video_rect.w / (float)g_video_rect.h;
+        SDL_Rect target_rect = g_video_rect; // Default to full fill
 
-        if (src_ratio > dst_ratio) {
-          // Source is wider than dest: Fit Width
-          target_rect.w = g_video_rect.w;
-          target_rect.h = (int)((float)g_video_rect.w / src_ratio);
-          target_rect.x = g_video_rect.x;
-          target_rect.y = g_video_rect.y + (g_video_rect.h - target_rect.h) / 2;
-        } else {
-          // Source is taller than dest: Fit Height
-          target_rect.h = g_video_rect.h;
-          target_rect.w = (int)((float)g_video_rect.h * src_ratio);
-          target_rect.y = g_video_rect.y;
-          target_rect.x = g_video_rect.x + (g_video_rect.w - target_rect.w) / 2;
+        // Aspect Fit Logic
+        if (st->size.w > 0 && st->size.h > 0) {
+          float src_ratio = (float)st->size.w / (float)st->size.h;
+          float dst_ratio = (float)g_video_rect.w / (float)g_video_rect.h;
+
+          if (src_ratio > dst_ratio) {
+            // Source is wider than dest: Fit Width
+            target_rect.w = g_video_rect.w;
+            target_rect.h = (int)((float)g_video_rect.w / src_ratio);
+            target_rect.x = g_video_rect.x;
+            target_rect.y =
+                g_video_rect.y + (g_video_rect.h - target_rect.h) / 2;
+          } else {
+            // Source is taller than dest: Fit Height
+            target_rect.h = g_video_rect.h;
+            target_rect.w = (int)((float)g_video_rect.h * src_ratio);
+            target_rect.y = g_video_rect.y;
+            target_rect.x =
+                g_video_rect.x + (g_video_rect.w - target_rect.w) / 2;
+          }
         }
-      }
 
-      // Logging
-      static int log_div = 0;
-      if (log_div++ % 60 == 0) {
-        fprintf(stderr, "RENDER_REMOTE_EXEC: Target=%d,%d %dx%d (Src %dx%d)\n",
-                target_rect.x, target_rect.y, target_rect.w, target_rect.h,
-                st->size.w, st->size.h);
-      }
+        // Logging
+        static int log_div = 0;
+        if (log_div++ % 60 == 0) {
+          fprintf(stderr,
+                  "RENDER_REMOTE_EXEC: Target=%d,%d %dx%d (Src %dx%d)\n",
+                  target_rect.x, target_rect.y, target_rect.w, target_rect.h,
+                  st->size.w, st->size.h);
+        }
 
-      // Render (No Clip needed for Aspect Fit usually, but keeps it clean)
-      // Draw Black Background first?
-      // SDL_RenderFillRect with black? The layer is already black/transparent.
+        // Render (No Clip needed for Aspect Fit usually, but keeps it clean)
+        // Draw Black Background first?
+        // SDL_RenderFillRect with black? The layer is already
+        // black/transparent.
 
-      int ret = SDL_RenderCopy(renderer, st->texture, NULL, &target_rect);
-      if (ret != 0) {
-        log_warn("BaresipManager", "SDL_RenderCopy failed: %s", SDL_GetError());
+        int ret = SDL_RenderCopy(renderer, st->texture, NULL, &target_rect);
+        if (ret != 0) {
+          log_warn("BaresipManager", "SDL_RenderCopy failed: %s",
+                   SDL_GetError());
+        }
       }
     }
 
@@ -1732,7 +1751,18 @@ int baresip_manager_resume_call(void *call_id) {
     log_warn("BaresipManager", "No call to resume");
     return -1;
   }
-  log_info("BaresipManager", "Resuming call %p", call);
+
+  // Hold other calls first
+  for (int i = 0; i < MAX_CALLS; i++) {
+    struct call *c = g_call_state.active_calls[i].call;
+    if (c && c != call && !call_is_onhold(c)) {
+      log_info("BaresipManager", "Holding existing call %p before resuming %p",
+               (void *)c, (void *)call);
+      call_hold(c, true);
+    }
+  }
+
+  log_info("BaresipManager", "Resuming call %p", (void *)call);
   return call_hold(call, false);
 }
 
