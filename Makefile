@@ -73,6 +73,7 @@ MODULE_SRCS = deps/baresip/modules/avcodec/avcodec.c \
               deps/baresip/modules/avformat/video.c \
               deps/baresip/modules/avformat/audio.c \
               deps/baresip/modules/swscale/swscale.c \
+    src/modules/gb28181/gb28181.c \
               deps/baresip/modules/fakevideo/fakevideo.c \
               deps/baresip/modules/selfview/selfview.c \
               deps/baresip/modules/g711/g711.c \
@@ -136,6 +137,12 @@ $(OBJ_DIR)/deps/%.o: deps/%.m
 	@mkdir -p $(dir $@)
 	@echo "Compiling deps objc: $<..."
 	$(CC) $(OBJCFLAGS) -c $< -o $@
+
+# Compile src/modules source files
+$(OBJ_DIR)/src/modules/%.o: src/modules/%.c
+	@mkdir -p $(dir $@)
+	@echo "Compiling src modules: $<..."
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Clean
 clean:

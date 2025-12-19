@@ -1161,6 +1161,10 @@ int baresip_manager_init(void) {
   mod_add(&m, &exports_turn);
   mod_add(&m, &exports_ice);
 
+  // GB28181 Support
+  extern const struct mod_export exports_gb28181;
+  mod_add(&m, &exports_gb28181);
+
   log_info("BaresipManager",
            "Modules registered. Forced video display to 'sdl_vidisp'");
 
