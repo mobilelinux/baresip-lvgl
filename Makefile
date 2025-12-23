@@ -47,7 +47,8 @@ SRCS = $(SRC_DIR)/main.c \
        $(APPLET_DIR)/calculator_applet.c \
        $(APPLET_DIR)/call_applet.c \
        $(APPLET_DIR)/contacts_applet.c \
-       $(APPLET_DIR)/call_log_applet.c
+       $(APPLET_DIR)/call_log_applet.c \
+       $(APPLET_DIR)/about_applet.c
 
 # LVGL source files
 LVGL_SRCS = $(shell find $(LVGL_DIR)/src -name '*.c')
@@ -168,3 +169,4 @@ help:
 	@echo "SDL2 is used for display and input (mouse, keyboard)"
 
 .PHONY: all clean run help
+

@@ -8,6 +8,17 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcapture/avcapture.m" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/avcodec.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/decode.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/encode.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/sdp.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/audio.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/avformat.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/video.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/fakevideo/fakevideo.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/selfview/selfview.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o.d"
+  "/Users/steven/dev/baresip-lvgl/deps/baresip/modules/swscale/swscale.c" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o.d"
   "/Users/steven/dev/baresip-lvgl/lv_drivers/sdl/sdl.c" "CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.o.d"
   "/Users/steven/dev/baresip-lvgl/lv_drivers/sdl/sdl_common.c" "CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl_common.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl_common.c.o.d"
   "/Users/steven/dev/baresip-lvgl/lvgl/src/core/lv_disp.c" "CMakeFiles/baresip-lvgl.dir/lvgl/src/core/lv_disp.c.o" "gcc" "CMakeFiles/baresip-lvgl.dir/lvgl/src/core/lv_disp.c.o.d"

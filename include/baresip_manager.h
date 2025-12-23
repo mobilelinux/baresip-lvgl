@@ -38,6 +38,7 @@ const char *baresip_manager_get_peer(void);
 void baresip_manager_mute(bool mute);
 bool baresip_manager_is_muted(void);
 int baresip_manager_add_account(const voip_account_t *account);
+int baresip_manager_account_register(const char *aor);
 void baresip_manager_destroy(void);
 
 /**
@@ -60,7 +61,9 @@ int baresip_manager_switch_to(void *call_id);
 int baresip_manager_hold_call(void *call_id);
 int baresip_manager_resume_call(void *call_id);
 // Video Display
+#include "logger.h"
 void baresip_manager_set_video_rect(int x, int y, int w, int h);
 void baresip_manager_set_local_video_rect(int x, int y, int w, int h);
+void baresip_manager_set_log_level(log_level_t level);
 
 #endif // BARESIP_MANAGER_H

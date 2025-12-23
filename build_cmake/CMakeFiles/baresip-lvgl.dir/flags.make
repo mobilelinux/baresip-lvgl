@@ -6,7 +6,7 @@ C_DEFINES =
 
 C_INCLUDES = -I/Users/steven/dev/baresip-lvgl/include -I/Users/steven/dev/baresip-lvgl/lvgl -I/Users/steven/dev/baresip-lvgl/lv_drivers -I/Users/steven/dev/baresip-lvgl/. -I/Users/steven/dev/baresip-lvgl/deps/baresip/include -I/Users/steven/dev/baresip-lvgl/deps/re/include -I/opt/homebrew/include -I/opt/homebrew/include/SDL2
 
-C_FLAGSarm64 =  -Wall -Wextra -O2 -D_THREAD_SAFE -g -std=gnu99 -arch arm64
+C_FLAGSarm64 =  -Wall -Wextra -O2 -D_THREAD_SAFE -DSTATIC -g -std=gnu99 -arch arm64
 
-C_FLAGS =  -Wall -Wextra -O2 -D_THREAD_SAFE -g -std=gnu99 -arch arm64
+C_FLAGS =  -Wall -Wextra -O2 -D_THREAD_SAFE -DSTATIC -g -std=gnu99 -arch arm64
 

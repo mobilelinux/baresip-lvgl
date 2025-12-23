@@ -323,7 +323,9 @@ static void default_account_changed(lv_event_t *e) {
   settings_data_t *data = (settings_data_t *)applet->user_data;
   lv_obj_t *dropdown = lv_event_get_target(e);
 
-  data->config.default_account_index = lv_dropdown_get_selected(dropdown);
+  int selected = lv_dropdown_get_selected(dropdown);
+  // Map index: 0 = "Always Ask" (-1), 1..N = Accounts[0..N-1]
+  data->config.default_account_index = selected - 1;
   save_settings(data);
   log_debug("SettingsApplet", "Default account changed to index: %d",
             data->config.default_account_index);
@@ -359,20 +361,45 @@ static void update_account_dropdowns(settings_data_t *data) {
     strcat(options, entry);
   }
 
-  if (strlen(options) == 0)
-    strcpy(options, "No Accounts");
+  char final_options[2048];
+  strcpy(final_options, "Always Ask\n");
+  if (strlen(options) > 0 && strcmp(options, "No Accounts") != 0) {
+    strcat(final_options, options);
+  } else if (strcmp(options, "No Accounts") == 0) {
+    // If no accounts, "Always Ask" is the only valid option effectively,
+    // but we still show "No Accounts" for info?
+    // Or just leave it as "Always Ask".
+    // If we have "No Accounts", we can't really "Ask" (list empty).
+    // But let's append it for consistency.
+    // Actually, if count=0, options="No Accounts".
+    // We'll just use "Always Ask" if count=0?
+    // Let's keep "Always Ask\nNo Accounts" if 0?
+    // No, if 0 accounts, we can't select any.
+    // But let's just prepend "Always Ask" to whatever we generated.
+    if (data->account_count == 0) {
+      strcpy(final_options, "Always Ask");
+    } else {
+      strcat(final_options, options);
+    }
+  }
 
   if (data->default_account_dropdown)
-    lv_dropdown_set_options(data->default_account_dropdown, options);
+    lv_dropdown_set_options(data->default_account_dropdown, final_options);
 
   // Preserve selection if possible, otherwise clamp
   if (data->codec_dropdown)
     lv_dropdown_set_selected(data->codec_dropdown,
                              data->config.preferred_codec);
 
-  if (data->default_account_dropdown)
-    lv_dropdown_set_selected(data->default_account_dropdown,
-                             data->config.default_account_index);
+  if (data->default_account_dropdown) {
+    // Map config index to dropdown index
+    // -1 -> 0
+    // 0 -> 1
+    int dd_index = data->config.default_account_index + 1;
+    if (dd_index < 0)
+      dd_index = 0; // Safety for -2?
+    lv_dropdown_set_selected(data->default_account_dropdown, dd_index);
+  }
 }
 
 static void refresh_account_list(settings_data_t *data) {

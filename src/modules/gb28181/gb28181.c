@@ -26,12 +26,20 @@ static void heartbeat_handler(void *arg) {
       continue;
     }
 
-    const char *user = account_auth_user(ua_account(ua));
-    if (!user) {
-      // Fallback to AOR user part if auth_user is not set
-      // (Simpler: just use AOR for now if NULL, essentially "sip:user@domain")
-      user = account_aor(ua_account(ua));
+    struct pl device_id_pl = pl_null;
+    const char *auth_user = account_auth_user(ua_account(ua));
+
+    if (auth_user) {
+      pl_set_str(&device_id_pl, auth_user);
+    } else {
+      const struct uri *luri = account_luri(ua_account(ua));
+      if (luri) {
+        device_id_pl = luri->user;
+      }
     }
+
+    if (!device_id_pl.p)
+      continue;
 
     char xml_body[512];
     sn_counter++;
@@ -42,29 +50,21 @@ static void heartbeat_handler(void *arg) {
              "<Notify>\n"
              "<CmdType>Keepalive</CmdType>\n"
              "<SN>%u</SN>\n"
-             "<DeviceID>%s</DeviceID>\n"
+             "<DeviceID>%.*s</DeviceID>\n"
              "<Status>OK</Status>\n"
              "<Info>\n"
              "</Info>\n"
              "</Notify>",
-             sn_counter, user);
+             sn_counter, (int)device_id_pl.l, device_id_pl.p);
 
     // Send SIP MESSAGE
-    // We need destination URI. Usually the Registrar.
-    const char *reg_uri = account_outbound(ua_account(ua), 0);
-    if (!reg_uri)
-      reg_uri = account_aor(ua_account(ua));
+    const char *dest_uri = account_outbound(ua_account(ua), 0);
+    if (!dest_uri) {
+      dest_uri = account_aor(ua_account(ua));
+    }
 
-    // baresip `message` module uses `message_send`.
-    // We can manually send using `ua_send_request`.
-
-    struct pl body;
-    pl_set_str(&body, xml_body);
-
-    // We use MESSAGE method
-    // Peer: We assume the registrar is the target.
-    // If we can't easily get registrar URI, this might fail.
-    // Assuming AOR domain for now.
+    // Send message (stateless)
+    message_send(ua, dest_uri, xml_body, NULL, NULL);
   }
 }
 

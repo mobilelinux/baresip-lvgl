@@ -66,6 +66,37 @@ void history_clear(void) {
   }
 
   history_load();
+  history_load();
+}
+
+void history_remove(int index) {
+  if (index < 0 || index >= g_history_count)
+    return;
+
+  // We need to delete from DB. We don't have a unique ID in the struct
+  // currently loaded but we can delete by timestamp and number. Warning: This
+  // could delete duplicates.
+  call_log_entry_t *e = &g_history[index];
+
+  sqlite3 *db = db_get_handle();
+  if (!db)
+    return;
+
+  char *sql = sqlite3_mprintf(
+      "DELETE FROM call_log WHERE timestamp=%ld AND number='%q';", e->timestamp,
+      e->number);
+
+  char *errmsg = NULL;
+  int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
+  sqlite3_free(sql);
+
+  if (rc != SQLITE_OK) {
+    log_warn("HistoryManager", "Failed to remove entry: %s", errmsg);
+    sqlite3_free(errmsg);
+  } else {
+    // Reload on success
+    history_load();
+  }
 }
 
 int history_load(void) {

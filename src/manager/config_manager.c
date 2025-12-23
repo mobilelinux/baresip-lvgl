@@ -43,6 +43,7 @@ int config_load_app_settings(app_config_t *config) {
   config->start_automatically = false;
   config->address_family = 1; // Default IPv4
   strcpy(config->user_agent, "baresip-lvgl");
+  strcpy(config->listen_address, "0.0.0.0:5060");
   config->contacts_source = 0;
   config->video_frame_size = 0;
 

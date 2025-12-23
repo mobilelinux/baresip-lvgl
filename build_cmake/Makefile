@@ -129,6 +129,270 @@ baresip-lvgl/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/build
 .PHONY : baresip-lvgl/fast
 
+deps/baresip/modules/avcapture/avcapture.o: deps/baresip/modules/avcapture/avcapture.m.o
+.PHONY : deps/baresip/modules/avcapture/avcapture.o
+
+# target to build an object file
+deps/baresip/modules/avcapture/avcapture.m.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o
+.PHONY : deps/baresip/modules/avcapture/avcapture.m.o
+
+deps/baresip/modules/avcapture/avcapture.i: deps/baresip/modules/avcapture/avcapture.m.i
+.PHONY : deps/baresip/modules/avcapture/avcapture.i
+
+# target to preprocess a source file
+deps/baresip/modules/avcapture/avcapture.m.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.i
+.PHONY : deps/baresip/modules/avcapture/avcapture.m.i
+
+deps/baresip/modules/avcapture/avcapture.s: deps/baresip/modules/avcapture/avcapture.m.s
+.PHONY : deps/baresip/modules/avcapture/avcapture.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avcapture/avcapture.m.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.s
+.PHONY : deps/baresip/modules/avcapture/avcapture.m.s
+
+deps/baresip/modules/avcodec/avcodec.o: deps/baresip/modules/avcodec/avcodec.c.o
+.PHONY : deps/baresip/modules/avcodec/avcodec.o
+
+# target to build an object file
+deps/baresip/modules/avcodec/avcodec.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o
+.PHONY : deps/baresip/modules/avcodec/avcodec.c.o
+
+deps/baresip/modules/avcodec/avcodec.i: deps/baresip/modules/avcodec/avcodec.c.i
+.PHONY : deps/baresip/modules/avcodec/avcodec.i
+
+# target to preprocess a source file
+deps/baresip/modules/avcodec/avcodec.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.i
+.PHONY : deps/baresip/modules/avcodec/avcodec.c.i
+
+deps/baresip/modules/avcodec/avcodec.s: deps/baresip/modules/avcodec/avcodec.c.s
+.PHONY : deps/baresip/modules/avcodec/avcodec.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avcodec/avcodec.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.s
+.PHONY : deps/baresip/modules/avcodec/avcodec.c.s
+
+deps/baresip/modules/avcodec/decode.o: deps/baresip/modules/avcodec/decode.c.o
+.PHONY : deps/baresip/modules/avcodec/decode.o
+
+# target to build an object file
+deps/baresip/modules/avcodec/decode.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o
+.PHONY : deps/baresip/modules/avcodec/decode.c.o
+
+deps/baresip/modules/avcodec/decode.i: deps/baresip/modules/avcodec/decode.c.i
+.PHONY : deps/baresip/modules/avcodec/decode.i
+
+# target to preprocess a source file
+deps/baresip/modules/avcodec/decode.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.i
+.PHONY : deps/baresip/modules/avcodec/decode.c.i
+
+deps/baresip/modules/avcodec/decode.s: deps/baresip/modules/avcodec/decode.c.s
+.PHONY : deps/baresip/modules/avcodec/decode.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avcodec/decode.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.s
+.PHONY : deps/baresip/modules/avcodec/decode.c.s
+
+deps/baresip/modules/avcodec/encode.o: deps/baresip/modules/avcodec/encode.c.o
+.PHONY : deps/baresip/modules/avcodec/encode.o
+
+# target to build an object file
+deps/baresip/modules/avcodec/encode.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o
+.PHONY : deps/baresip/modules/avcodec/encode.c.o
+
+deps/baresip/modules/avcodec/encode.i: deps/baresip/modules/avcodec/encode.c.i
+.PHONY : deps/baresip/modules/avcodec/encode.i
+
+# target to preprocess a source file
+deps/baresip/modules/avcodec/encode.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.i
+.PHONY : deps/baresip/modules/avcodec/encode.c.i
+
+deps/baresip/modules/avcodec/encode.s: deps/baresip/modules/avcodec/encode.c.s
+.PHONY : deps/baresip/modules/avcodec/encode.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avcodec/encode.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.s
+.PHONY : deps/baresip/modules/avcodec/encode.c.s
+
+deps/baresip/modules/avcodec/sdp.o: deps/baresip/modules/avcodec/sdp.c.o
+.PHONY : deps/baresip/modules/avcodec/sdp.o
+
+# target to build an object file
+deps/baresip/modules/avcodec/sdp.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o
+.PHONY : deps/baresip/modules/avcodec/sdp.c.o
+
+deps/baresip/modules/avcodec/sdp.i: deps/baresip/modules/avcodec/sdp.c.i
+.PHONY : deps/baresip/modules/avcodec/sdp.i
+
+# target to preprocess a source file
+deps/baresip/modules/avcodec/sdp.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.i
+.PHONY : deps/baresip/modules/avcodec/sdp.c.i
+
+deps/baresip/modules/avcodec/sdp.s: deps/baresip/modules/avcodec/sdp.c.s
+.PHONY : deps/baresip/modules/avcodec/sdp.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avcodec/sdp.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.s
+.PHONY : deps/baresip/modules/avcodec/sdp.c.s
+
+deps/baresip/modules/avformat/audio.o: deps/baresip/modules/avformat/audio.c.o
+.PHONY : deps/baresip/modules/avformat/audio.o
+
+# target to build an object file
+deps/baresip/modules/avformat/audio.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o
+.PHONY : deps/baresip/modules/avformat/audio.c.o
+
+deps/baresip/modules/avformat/audio.i: deps/baresip/modules/avformat/audio.c.i
+.PHONY : deps/baresip/modules/avformat/audio.i
+
+# target to preprocess a source file
+deps/baresip/modules/avformat/audio.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.i
+.PHONY : deps/baresip/modules/avformat/audio.c.i
+
+deps/baresip/modules/avformat/audio.s: deps/baresip/modules/avformat/audio.c.s
+.PHONY : deps/baresip/modules/avformat/audio.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avformat/audio.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.s
+.PHONY : deps/baresip/modules/avformat/audio.c.s
+
+deps/baresip/modules/avformat/avformat.o: deps/baresip/modules/avformat/avformat.c.o
+.PHONY : deps/baresip/modules/avformat/avformat.o
+
+# target to build an object file
+deps/baresip/modules/avformat/avformat.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o
+.PHONY : deps/baresip/modules/avformat/avformat.c.o
+
+deps/baresip/modules/avformat/avformat.i: deps/baresip/modules/avformat/avformat.c.i
+.PHONY : deps/baresip/modules/avformat/avformat.i
+
+# target to preprocess a source file
+deps/baresip/modules/avformat/avformat.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.i
+.PHONY : deps/baresip/modules/avformat/avformat.c.i
+
+deps/baresip/modules/avformat/avformat.s: deps/baresip/modules/avformat/avformat.c.s
+.PHONY : deps/baresip/modules/avformat/avformat.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avformat/avformat.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.s
+.PHONY : deps/baresip/modules/avformat/avformat.c.s
+
+deps/baresip/modules/avformat/video.o: deps/baresip/modules/avformat/video.c.o
+.PHONY : deps/baresip/modules/avformat/video.o
+
+# target to build an object file
+deps/baresip/modules/avformat/video.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o
+.PHONY : deps/baresip/modules/avformat/video.c.o
+
+deps/baresip/modules/avformat/video.i: deps/baresip/modules/avformat/video.c.i
+.PHONY : deps/baresip/modules/avformat/video.i
+
+# target to preprocess a source file
+deps/baresip/modules/avformat/video.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.i
+.PHONY : deps/baresip/modules/avformat/video.c.i
+
+deps/baresip/modules/avformat/video.s: deps/baresip/modules/avformat/video.c.s
+.PHONY : deps/baresip/modules/avformat/video.s
+
+# target to generate assembly for a file
+deps/baresip/modules/avformat/video.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.s
+.PHONY : deps/baresip/modules/avformat/video.c.s
+
+deps/baresip/modules/fakevideo/fakevideo.o: deps/baresip/modules/fakevideo/fakevideo.c.o
+.PHONY : deps/baresip/modules/fakevideo/fakevideo.o
+
+# target to build an object file
+deps/baresip/modules/fakevideo/fakevideo.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o
+.PHONY : deps/baresip/modules/fakevideo/fakevideo.c.o
+
+deps/baresip/modules/fakevideo/fakevideo.i: deps/baresip/modules/fakevideo/fakevideo.c.i
+.PHONY : deps/baresip/modules/fakevideo/fakevideo.i
+
+# target to preprocess a source file
+deps/baresip/modules/fakevideo/fakevideo.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.i
+.PHONY : deps/baresip/modules/fakevideo/fakevideo.c.i
+
+deps/baresip/modules/fakevideo/fakevideo.s: deps/baresip/modules/fakevideo/fakevideo.c.s
+.PHONY : deps/baresip/modules/fakevideo/fakevideo.s
+
+# target to generate assembly for a file
+deps/baresip/modules/fakevideo/fakevideo.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.s
+.PHONY : deps/baresip/modules/fakevideo/fakevideo.c.s
+
+deps/baresip/modules/selfview/selfview.o: deps/baresip/modules/selfview/selfview.c.o
+.PHONY : deps/baresip/modules/selfview/selfview.o
+
+# target to build an object file
+deps/baresip/modules/selfview/selfview.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o
+.PHONY : deps/baresip/modules/selfview/selfview.c.o
+
+deps/baresip/modules/selfview/selfview.i: deps/baresip/modules/selfview/selfview.c.i
+.PHONY : deps/baresip/modules/selfview/selfview.i
+
+# target to preprocess a source file
+deps/baresip/modules/selfview/selfview.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.i
+.PHONY : deps/baresip/modules/selfview/selfview.c.i
+
+deps/baresip/modules/selfview/selfview.s: deps/baresip/modules/selfview/selfview.c.s
+.PHONY : deps/baresip/modules/selfview/selfview.s
+
+# target to generate assembly for a file
+deps/baresip/modules/selfview/selfview.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.s
+.PHONY : deps/baresip/modules/selfview/selfview.c.s
+
+deps/baresip/modules/swscale/swscale.o: deps/baresip/modules/swscale/swscale.c.o
+.PHONY : deps/baresip/modules/swscale/swscale.o
+
+# target to build an object file
+deps/baresip/modules/swscale/swscale.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o
+.PHONY : deps/baresip/modules/swscale/swscale.c.o
+
+deps/baresip/modules/swscale/swscale.i: deps/baresip/modules/swscale/swscale.c.i
+.PHONY : deps/baresip/modules/swscale/swscale.i
+
+# target to preprocess a source file
+deps/baresip/modules/swscale/swscale.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.i
+.PHONY : deps/baresip/modules/swscale/swscale.c.i
+
+deps/baresip/modules/swscale/swscale.s: deps/baresip/modules/swscale/swscale.c.s
+.PHONY : deps/baresip/modules/swscale/swscale.s
+
+# target to generate assembly for a file
+deps/baresip/modules/swscale/swscale.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/baresip-lvgl.dir/build.make CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.s
+.PHONY : deps/baresip/modules/swscale/swscale.c.s
+
 lv_drivers/sdl/sdl.o: lv_drivers/sdl/sdl.c.o
 .PHONY : lv_drivers/sdl/sdl.o
 
@@ -5130,6 +5394,39 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... baresip-lvgl"
+	@echo "... deps/baresip/modules/avcapture/avcapture.o"
+	@echo "... deps/baresip/modules/avcapture/avcapture.i"
+	@echo "... deps/baresip/modules/avcapture/avcapture.s"
+	@echo "... deps/baresip/modules/avcodec/avcodec.o"
+	@echo "... deps/baresip/modules/avcodec/avcodec.i"
+	@echo "... deps/baresip/modules/avcodec/avcodec.s"
+	@echo "... deps/baresip/modules/avcodec/decode.o"
+	@echo "... deps/baresip/modules/avcodec/decode.i"
+	@echo "... deps/baresip/modules/avcodec/decode.s"
+	@echo "... deps/baresip/modules/avcodec/encode.o"
+	@echo "... deps/baresip/modules/avcodec/encode.i"
+	@echo "... deps/baresip/modules/avcodec/encode.s"
+	@echo "... deps/baresip/modules/avcodec/sdp.o"
+	@echo "... deps/baresip/modules/avcodec/sdp.i"
+	@echo "... deps/baresip/modules/avcodec/sdp.s"
+	@echo "... deps/baresip/modules/avformat/audio.o"
+	@echo "... deps/baresip/modules/avformat/audio.i"
+	@echo "... deps/baresip/modules/avformat/audio.s"
+	@echo "... deps/baresip/modules/avformat/avformat.o"
+	@echo "... deps/baresip/modules/avformat/avformat.i"
+	@echo "... deps/baresip/modules/avformat/avformat.s"
+	@echo "... deps/baresip/modules/avformat/video.o"
+	@echo "... deps/baresip/modules/avformat/video.i"
+	@echo "... deps/baresip/modules/avformat/video.s"
+	@echo "... deps/baresip/modules/fakevideo/fakevideo.o"
+	@echo "... deps/baresip/modules/fakevideo/fakevideo.i"
+	@echo "... deps/baresip/modules/fakevideo/fakevideo.s"
+	@echo "... deps/baresip/modules/selfview/selfview.o"
+	@echo "... deps/baresip/modules/selfview/selfview.i"
+	@echo "... deps/baresip/modules/selfview/selfview.s"
+	@echo "... deps/baresip/modules/swscale/swscale.o"
+	@echo "... deps/baresip/modules/swscale/swscale.i"
+	@echo "... deps/baresip/modules/swscale/swscale.s"
 	@echo "... lv_drivers/sdl/sdl.o"
 	@echo "... lv_drivers/sdl/sdl.i"
 	@echo "... lv_drivers/sdl/sdl.s"

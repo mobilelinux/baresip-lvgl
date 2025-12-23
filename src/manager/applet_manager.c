@@ -1,5 +1,6 @@
 #include "applet_manager.h"
 #include "logger.h"
+#include "lvgl.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -216,4 +217,33 @@ void applet_manager_destroy(void) {
 
   memset(&g_manager, 0, sizeof(applet_manager_t));
   log_info("AppletManager", "Destroyed");
+}
+
+static void toast_del_cb(lv_timer_t *t) {
+  lv_obj_t *toast = (lv_obj_t *)t->user_data;
+  if (lv_obj_is_valid(toast)) {
+    lv_obj_del(toast);
+  }
+}
+
+void applet_manager_show_toast(const char *msg) {
+  if (!msg)
+    return;
+
+  lv_obj_t *toast = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(toast, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_style_bg_color(toast, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(toast, LV_OPA_80, 0);
+  lv_obj_set_style_radius(toast, 20, 0);
+  lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -100);
+  lv_obj_clear_flag(toast, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *label = lv_label_create(toast);
+  lv_label_set_text(label, msg);
+  lv_obj_set_style_text_color(label, lv_color_white(), 0);
+  lv_obj_center(label);
+
+  // Auto-delete timer
+  lv_timer_t *timer = lv_timer_create(toast_del_cb, 2000, toast);
+  lv_timer_set_repeat_count(timer, 1);
 }

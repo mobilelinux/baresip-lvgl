@@ -259,6 +259,35 @@ static void back_to_home(lv_event_t *e) {
   applet_manager_back();
 }
 
+static void status_icon_clicked(lv_event_t *e) {
+  call_data_t *data = (call_data_t *)lv_event_get_user_data(e);
+  if (!data)
+    return;
+
+  int idx = data->config.default_account_index;
+  if (idx < 0 || idx >= data->account_count) {
+    applet_manager_show_toast("No default account selected.");
+    return;
+  }
+
+  // Allow re-register attempt if failed OR registering (stuck)
+  if (data->account_status[idx] != REG_STATUS_REGISTERED) {
+    voip_account_t *acc = &data->accounts[idx];
+    char aor[256];
+    snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+
+    applet_manager_show_toast("Retrying registration...");
+
+    // Immediate visual feedback
+    update_account_status(data, idx, REG_STATUS_REGISTERING);
+
+    baresip_manager_account_register(aor);
+    // Ignore return value as requested to avoid popup
+  } else {
+    applet_manager_show_toast("Account is already registered.");
+  }
+}
+
 static void call_key_handler(lv_event_t *e) {
   (void)e;
   uint32_t key = lv_indev_get_key(lv_indev_get_act());
@@ -298,57 +327,11 @@ static void call_key_handler(lv_event_t *e) {
   }
 }
 
+extern applet_t about_applet;
+
 static void menu_about_action(call_data_t *data) {
   (void)data;
-  lv_obj_t *mbox = lv_msgbox_create(NULL, "About",
-                                    "Baresip LVGL Call Applet\nVersion "
-                                    "1.0\nBased on baresip-studio "
-                                    "design.",
-                                    NULL, true);
-  lv_obj_center(mbox);
-}
-
-static void menu_backup_action(call_data_t *data) {
-  (void)data;
-  char config_dir[256];
-  config_get_dir_path(config_dir, sizeof(config_dir));
-  char src[256], dst[256];
-
-  snprintf(src, sizeof(src), "%s/accounts.conf", config_dir);
-  snprintf(dst, sizeof(dst), "%s/accounts.conf.bak", config_dir);
-  copy_file(src, dst);
-
-  snprintf(src, sizeof(src), "%s/settings.conf", config_dir);
-  snprintf(dst, sizeof(dst), "%s/settings.conf.bak", config_dir);
-  copy_file(src, dst);
-
-  lv_obj_t *mbox = lv_msgbox_create(
-      NULL, "Backup", "Settings backed up successfully!", NULL, true);
-  lv_obj_center(mbox);
-}
-
-static void menu_restore_action(call_data_t *data) {
-  char config_dir[256];
-  config_get_dir_path(config_dir, sizeof(config_dir));
-  char src[256], dst[256];
-
-  snprintf(src, sizeof(src), "%s/accounts.conf.bak", config_dir);
-  snprintf(dst, sizeof(dst), "%s/accounts.conf", config_dir);
-  if (copy_file(src, dst) == 0) {
-    snprintf(src, sizeof(src), "%s/settings.conf.bak", config_dir);
-    snprintf(dst, sizeof(dst), "%s/settings.conf", config_dir);
-    copy_file(src, dst);
-
-    load_settings(data);
-    update_account_dropdowns(data);
-    lv_obj_t *mbox = lv_msgbox_create(
-        NULL, "Restore", "Settings restored successfully!", NULL, true);
-    lv_obj_center(mbox);
-  } else {
-    lv_obj_t *mbox =
-        lv_msgbox_create(NULL, "Restore", "No backup found!", NULL, true);
-    lv_obj_center(mbox);
-  }
+  applet_manager_launch_applet(&about_applet);
 }
 
 static void menu_quit_action(call_data_t *data) {
@@ -358,10 +341,8 @@ static void menu_quit_action(call_data_t *data) {
 
 static void menu_close_clicked(lv_event_t *e) {
   lv_obj_t *obj = lv_event_get_target(e);
-  lv_obj_t *header = lv_obj_get_parent(obj);
-  lv_obj_t *menu_container = lv_obj_get_parent(header);
-  lv_obj_t *modal_bg = lv_obj_get_parent(menu_container);
-  lv_obj_del(modal_bg);
+  // When attached to modal_bg, obj IS the modal_bg layout
+  lv_obj_del(obj);
 }
 
 static void menu_event_cb(lv_event_t *e) {
@@ -380,10 +361,7 @@ static void menu_event_cb(lv_event_t *e) {
   } else if (strcmp(txt, "Accounts") == 0) {
     settings_open_accounts();
     applet_manager_launch("Settings");
-  } else if (strcmp(txt, "Backup") == 0) {
-    menu_backup_action(data);
-  } else if (strcmp(txt, "Restore") == 0) {
-    menu_restore_action(data);
+
   } else if (strcmp(txt, "Quit") == 0) {
     menu_quit_action(data);
   }
@@ -405,38 +383,20 @@ static void menu_btn_clicked(lv_event_t *e) {
   lv_obj_set_style_bg_opa(modal_bg, LV_OPA_50, 0);
   lv_obj_set_style_border_width(modal_bg, 0, 0);
   lv_obj_clear_flag(modal_bg, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(modal_bg, menu_close_clicked, LV_EVENT_CLICKED, NULL);
 
   lv_obj_t *menu_container = lv_obj_create(modal_bg);
-  lv_obj_set_size(menu_container, 220, 320);
-  lv_obj_center(menu_container);
+  lv_obj_set_size(menu_container, 220, LV_SIZE_CONTENT);
+  lv_obj_align(menu_container, LV_ALIGN_TOP_RIGHT, -10, 60);
   lv_obj_set_flex_flow(menu_container, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(menu_container, 0, 0);
   lv_obj_set_style_radius(menu_container, 10, 0);
 
-  lv_obj_t *header = lv_obj_create(menu_container);
-  lv_obj_set_size(header, LV_PCT(100), 50);
-  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_hor(header, 10, 0);
-  lv_obj_set_style_bg_color(header, lv_color_hex(0xE0E0E0), 0);
-  lv_obj_set_style_border_width(header, 0, 0);
-
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "Menu");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
-
-  lv_obj_t *close_btn = lv_btn_create(header);
-  lv_obj_set_size(close_btn, 30, 30);
-  lv_obj_set_style_bg_color(close_btn, lv_color_hex(0xFF5555), 0);
-  lv_obj_t *close_label = lv_label_create(close_btn);
-  lv_label_set_text(close_label, LV_SYMBOL_CLOSE);
-  lv_obj_center(close_label);
-  lv_obj_add_event_cb(close_btn, menu_close_clicked, LV_EVENT_CLICKED, NULL);
+  // Header removed as requested
 
   lv_obj_t *list = lv_list_create(menu_container);
-  lv_obj_set_size(list, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_flex_grow(list, 1);
+  lv_obj_set_size(list, LV_PCT(100), LV_SIZE_CONTENT);
+  // lv_obj_set_flex_grow(list, 1); // Removed to auto-fit
   lv_obj_set_style_border_width(list, 0, 0);
 
   lv_obj_t *btn;
@@ -447,12 +407,6 @@ static void menu_btn_clicked(lv_event_t *e) {
   lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
 
   btn = lv_list_add_btn(list, LV_SYMBOL_DIRECTORY, "Accounts");
-  lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
-
-  btn = lv_list_add_btn(list, LV_SYMBOL_UPLOAD, "Backup");
-  lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
-
-  btn = lv_list_add_btn(list, LV_SYMBOL_DOWNLOAD, "Restore");
   lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
 
   btn = lv_list_add_btn(list, LV_SYMBOL_POWER, "Quit");
@@ -863,6 +817,8 @@ static void call_btn_clicked(lv_event_t *e) {
       data->number_buffer[0] = '\0';
       if (data->number_label)
         lv_label_set_text(data->number_label, "Enter number");
+    } else {
+      applet_manager_show_toast("Account not available.");
     }
   }
 }
@@ -927,6 +883,8 @@ static void video_call_btn_clicked(lv_event_t *e) {
       data->number_buffer[0] = '\0';
       if (data->number_label)
         lv_label_set_text(data->number_label, "Enter number");
+    } else {
+      applet_manager_show_toast("Account not available.");
     }
   }
 }
@@ -986,6 +944,7 @@ static void account_picker_event_cb(lv_event_t *e) {
   } else {
     log_warn("CallApplet", "Failed to initiate call from "
                            "picker");
+    applet_manager_show_toast("Account not available.");
   }
 }
 
@@ -2183,10 +2142,19 @@ static int call_init(applet_t *applet) {
   lv_obj_set_size(data->hangup_btn, 70, 70);
   lv_obj_set_style_radius(data->hangup_btn, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(data->hangup_btn, lv_color_hex(0xFF0000), 0);
+  lv_obj_set_style_border_width(data->hangup_btn, 0, 0);
+  lv_obj_set_style_shadow_width(data->hangup_btn, 0, 0);
+  lv_obj_set_style_outline_width(data->hangup_btn, 0, 0);
+  // Remove default padding to ensure true centering
+  lv_obj_set_style_pad_all(data->hangup_btn, 0, 0);
+
   lv_obj_t *hangup_lbl = lv_label_create(data->hangup_btn);
   lv_label_set_text(hangup_lbl, LV_SYMBOL_CALL);
+  // Rotate to look like hangup
   lv_obj_set_style_transform_angle(hangup_lbl, 1350, 0);
-  lv_obj_center(hangup_lbl);
+  // Ensure font size is appropriate
+  lv_obj_set_style_text_font(hangup_lbl, &lv_font_montserrat_24, 0);
+  lv_obj_align(hangup_lbl, LV_ALIGN_CENTER, 10, 10);
   lv_obj_add_event_cb(data->hangup_btn, hangup_btn_clicked, LV_EVENT_CLICKED,
                       NULL);
 
@@ -2196,6 +2164,9 @@ static int call_init(applet_t *applet) {
   lv_obj_set_size(data->answer_btn, 70, 70);
   lv_obj_set_style_radius(data->answer_btn, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(data->answer_btn, lv_color_hex(0x00AA00), 0);
+  lv_obj_set_style_border_width(data->answer_btn, 0, 0);
+  lv_obj_set_style_shadow_width(data->answer_btn, 0, 0);
+  lv_obj_set_style_outline_width(data->answer_btn, 0, 0);
   lv_obj_t *answer_lbl = lv_label_create(data->answer_btn);
   lv_label_set_text(answer_lbl, LV_SYMBOL_CALL);
   lv_obj_center(answer_lbl);
@@ -2208,6 +2179,9 @@ static int call_init(applet_t *applet) {
   lv_obj_set_size(data->video_answer_btn, 70, 70);
   lv_obj_set_style_radius(data->video_answer_btn, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(data->video_answer_btn, lv_color_hex(0x555555), 0);
+  lv_obj_set_style_border_width(data->video_answer_btn, 0, 0);
+  lv_obj_set_style_shadow_width(data->video_answer_btn, 0, 0);
+  lv_obj_set_style_outline_width(data->video_answer_btn, 0, 0);
   lv_obj_t *vid_ans_lbl = lv_label_create(data->video_answer_btn);
   lv_label_set_text(vid_ans_lbl, LV_SYMBOL_VIDEO);
   lv_obj_center(vid_ans_lbl);
@@ -2218,6 +2192,7 @@ static int call_init(applet_t *applet) {
   // === DIALER SCREEN ===
   lv_obj_t *dialer_container = lv_obj_create(data->dialer_screen);
   lv_obj_set_size(dialer_container, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_scrollbar_mode(dialer_container, LV_SCROLLBAR_MODE_OFF);
   lv_obj_set_flex_flow(dialer_container, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(dialer_container, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -2225,6 +2200,8 @@ static int call_init(applet_t *applet) {
 
   lv_obj_t *dialer_header = lv_obj_create(dialer_container);
   lv_obj_set_size(dialer_header, LV_PCT(100), 60);
+  lv_obj_set_scrollbar_mode(dialer_header, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(dialer_header, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(dialer_header, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(dialer_header, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -2251,6 +2228,8 @@ static int call_init(applet_t *applet) {
 
   lv_obj_t *account_row = lv_obj_create(dialer_container);
   lv_obj_set_size(account_row, LV_PCT(90), 50);
+  lv_obj_set_scrollbar_mode(account_row, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(account_row, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(account_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(account_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
@@ -2261,6 +2240,9 @@ static int call_init(applet_t *applet) {
   lv_obj_set_style_bg_color(data->dialer_status_icon, lv_color_hex(0x404040),
                             0);
   lv_obj_set_style_border_width(data->dialer_status_icon, 0, 0);
+  lv_obj_add_flag(data->dialer_status_icon, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(data->dialer_status_icon, status_icon_clicked,
+                      LV_EVENT_CLICKED, data);
 
   data->dialer_account_dropdown = lv_dropdown_create(account_row);
   lv_obj_set_flex_grow(data->dialer_account_dropdown, 1);
@@ -2273,6 +2255,8 @@ static int call_init(applet_t *applet) {
 
   lv_obj_t *numpad = lv_obj_create(dialer_container);
   lv_obj_set_size(numpad, LV_PCT(80), 240);
+  lv_obj_set_scrollbar_mode(numpad, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(numpad, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_align(numpad, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_flex_flow(numpad, LV_FLEX_FLOW_ROW_WRAP);
   lv_obj_set_flex_align(numpad, LV_FLEX_ALIGN_SPACE_EVENLY,
@@ -2295,6 +2279,8 @@ static int call_init(applet_t *applet) {
 
   lv_obj_t *btn_row = lv_obj_create(dialer_container);
   lv_obj_set_size(btn_row, LV_PCT(90), 80);
+  lv_obj_set_scrollbar_mode(btn_row, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_align(btn_row, LV_ALIGN_BOTTOM_MID, 0, -10);
   lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,

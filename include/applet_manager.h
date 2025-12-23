@@ -83,4 +83,10 @@ applet_t **applet_manager_get_all(int *count);
  */
 void applet_manager_destroy(void);
 
+/**
+ * Show a toast message
+ * @param msg The message to display
+ */
+void applet_manager_show_toast(const char *msg);
+
 #endif // APPLET_MANAGER_H

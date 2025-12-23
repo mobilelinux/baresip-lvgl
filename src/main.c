@@ -18,6 +18,7 @@ extern void calculator_applet_register(void);
 extern void call_applet_register(void);
 extern void contacts_applet_register(void);
 extern void call_log_applet_register(void);
+extern void about_applet_register(void);
 
 // Get current time in milliseconds
 static uint32_t get_tick_ms(void) {
@@ -127,8 +128,10 @@ int main(void) {
   memset(&config, 0, sizeof(app_config_t));
   if (config_load_app_settings(&config) == 0) {
     logger_init(config.log_level);
+    baresip_manager_set_log_level(config.log_level);
   } else {
     logger_init(LOG_LEVEL_INFO);
+    baresip_manager_set_log_level(LOG_LEVEL_INFO);
   }
 
   // Initialize Baresip Manager EARLY (to load modules before applets use them)
@@ -151,6 +154,7 @@ int main(void) {
   call_applet_register();
   contacts_applet_register();
   call_log_applet_register();
+  about_applet_register();
 
   // Force initialization of Call applet to start background SIP services
   log_info("Main", "Initializing background services...");

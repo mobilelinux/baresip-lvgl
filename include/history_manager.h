@@ -28,8 +28,12 @@ int history_get_count(void);
 const call_log_entry_t *history_get_at(int index);
 
 // Add a new history entry
+// Add a new history entry
 int history_add(const char *name, const char *number, call_type_t type,
                 const char *account_aor);
+
+// Remove history entry at index
+void history_remove(int index);
 
 // Clear all history
 void history_clear(void);

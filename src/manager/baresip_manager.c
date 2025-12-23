@@ -1,10 +1,14 @@
 #include "baresip_manager.h"
+#include "config_manager.h"
 #include "history_manager.h"
 #include "logger.h"
 #include "lv_drivers/sdl/sdl.h"
 #include <SDL.h>
 #include <baresip.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <re.h>
+#include <re_dbg.h>
 #include <rem_vid.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -1055,6 +1059,90 @@ int baresip_manager_init(void) {
     return EINVAL;
   }
 
+  // --- Apply Application Settings Overrides ---
+  app_config_t app_conf;
+  if (config_load_app_settings(&app_conf) == 0) {
+    log_info("BaresipManager", "Applying App Settings Overrides...");
+
+    // 1. Listen Address (Start Automatically)
+    if (app_conf.start_automatically && strlen(app_conf.listen_address) > 0) {
+      log_info("BaresipManager", "Override Listen Address: %s",
+               app_conf.listen_address);
+      strncpy(cfg->sip.local, app_conf.listen_address,
+              sizeof(cfg->sip.local) - 1);
+    }
+
+    // 2. DNS Servers
+    if (strlen(app_conf.dns_servers) > 0) {
+      log_info("BaresipManager", "Override DNS Servers: %s",
+               app_conf.dns_servers);
+      cfg->net.nsc = 0; // Reset existing
+      char *dup = strdup(app_conf.dns_servers);
+      if (dup) {
+        char *tok = strtok(dup, ",");
+        while (tok && cfg->net.nsc < NET_MAX_NS) {
+          // Trim leading whitespace
+          while (*tok == ' ')
+            tok++;
+
+          char dns_addr[64];
+          strncpy(dns_addr, tok, sizeof(dns_addr) - 1);
+          dns_addr[sizeof(dns_addr) - 1] = '\0';
+
+          // Validate and append port 53 if missing
+          struct sa temp_sa;
+          if (sa_decode(&temp_sa, dns_addr, strlen(dns_addr)) != 0) {
+            // Try appending :53
+            char with_port[64];
+            snprintf(with_port, sizeof(with_port), "%s:53", dns_addr);
+            if (sa_decode(&temp_sa, with_port, strlen(with_port)) == 0) {
+              strncpy(dns_addr, with_port, sizeof(dns_addr) - 1);
+              dns_addr[sizeof(dns_addr) - 1] = '\0';
+            }
+          }
+
+          strncpy(cfg->net.nsv[cfg->net.nsc].addr, dns_addr, 63);
+          cfg->net.nsv[cfg->net.nsc].addr[63] = '\0';
+          cfg->net.nsc++;
+          tok = strtok(NULL, ",");
+        }
+        free(dup);
+      }
+    }
+
+    // 3. Video Frame Size
+    // 0: 1920x1080 (Added)
+    // 1: 1280x720
+    // 2: 640x480
+    // 3: 320x240
+    switch (app_conf.video_frame_size) {
+    case 0:
+      cfg->video.width = 1920;
+      cfg->video.height = 1080;
+      break;
+    case 1:
+      cfg->video.width = 1280;
+      cfg->video.height = 720;
+      break;
+    case 2:
+      cfg->video.width = 640;
+      cfg->video.height = 480;
+      break;
+    case 3:
+      cfg->video.width = 320;
+      cfg->video.height = 240;
+      break;
+    default:
+      // Default to 720p if unknown
+      cfg->video.width = 1280;
+      cfg->video.height = 720;
+      break;
+    }
+    log_info("BaresipManager", "Override Video Size: %dx%d", cfg->video.width,
+             cfg->video.height);
+  }
+  // --------------------------------------------
+
 #ifdef __APPLE__
   // FORCE audio driver to audiounit on macOS, ignoring config file errors
   log_info("BaresipManager",
@@ -1293,6 +1381,107 @@ reg_status_t baresip_manager_get_account_status(const char *aor) {
     return REG_STATUS_NONE;
   account_status_t *acc = find_account(aor);
   return acc ? acc->status : REG_STATUS_NONE;
+}
+
+// Helper to detect all active local IPs (IPv4) and add to net
+static void baresip_manager_update_interfaces(struct network *net) {
+  struct ifaddrs *ifaddr, *ifa;
+
+  if (getifaddrs(&ifaddr) == -1) {
+    perror("getifaddrs");
+    return;
+  }
+
+  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+    if (ifa->ifa_addr == NULL)
+      continue;
+
+    // Skip Loopback
+    if (ifa->ifa_flags & IFF_LOOPBACK)
+      continue;
+
+    // We only care about IPv4 for now
+    if (ifa->ifa_addr->sa_family == AF_INET) {
+      struct sa sa;
+      if (sa_set_sa(&sa, ifa->ifa_addr) == 0) {
+        char buf[64];
+        sa_ntop(&sa, buf, sizeof(buf));
+        log_info("BaresipManager", "Detected/Added interface: %s (%s)",
+                 ifa->ifa_name, buf);
+        net_add_address(net, &sa);
+      }
+    }
+  }
+
+  freeifaddrs(ifaddr);
+}
+
+int baresip_manager_account_register(const char *aor) {
+  struct ua *ua = NULL;
+
+  if (aor) {
+    ua = uag_find_aor(aor);
+
+    // Fuzzy match fallback
+    if (!ua) {
+      struct le *le;
+      for (le = list_head(uag_list()); le; le = le->next) {
+        struct ua *u = le->data;
+        const char *ua_aor_str = account_aor(ua_account(u));
+        if (ua_aor_str && strstr(ua_aor_str, aor)) {
+          ua = u;
+          log_info("BaresipManager",
+                   "Register: Exact match failed, using fuzzy match: %s -> %s",
+                   aor, ua_aor_str);
+          break;
+        }
+      }
+    }
+  } else {
+    struct le *le = list_head(uag_list());
+    if (le)
+      ua = le->data;
+  }
+
+  if (!ua) {
+    log_warn("BaresipManager", "Register: No UA found for '%s'. Checked UAs:",
+             aor ? aor : "Default");
+    struct le *le;
+    for (le = list_head(uag_list()); le; le = le->next) {
+      struct ua *u = le->data;
+      log_warn("BaresipManager", " - Candidate: %s",
+               account_aor(ua_account(u)));
+    }
+    return -1;
+  }
+
+  log_info("BaresipManager", "Triggering manual register for %s",
+           account_aor(ua_account(ua)));
+
+  // Force network state refresh
+  log_info("BaresipManager", "Refreshing network state before register...");
+
+  struct network *net = baresip_network();
+  if (net) {
+    net_flush_addresses(net);
+    sip_transp_flush(uag_sip());
+    net_set_af(net, AF_INET);
+    net_set_af(net, AF_INET6);
+
+    // Detect ALL Real IPs from OS
+    baresip_manager_update_interfaces(net);
+
+    // As a robustness fallback, we can add 0.0.0.0 as well, but
+    // usually adding real IPs is sufficient and safer for routing.
+    // If update_interfaces found nothing, we might want fallback?
+    // But then we are back to square one.
+  }
+
+  // Reset transports with the valid IP list.
+  // This will create correct transports binding to ALL detected IPs.
+  uag_reset_transp(true, true);
+
+  return ua_register(ua);
 }
 
 // Internal helper for making calls
@@ -1805,4 +1994,49 @@ void baresip_manager_destroy(void) {
   ua_close();
   baresip_close();
   libre_close();
+}
+
+void baresip_manager_set_log_level(log_level_t level) {
+  enum log_level b_level;
+  int dbg_level;
+
+  // Map App Log Level -> Baresip Log Level
+  switch (level) {
+  case LOG_LEVEL_TRACE:
+    b_level = LEVEL_DEBUG;
+    dbg_level = DBG_DEBUG; // 7
+    break;
+  case LOG_LEVEL_DEBUG:
+    b_level = LEVEL_DEBUG;
+    dbg_level = DBG_DEBUG; // 7
+    break;
+  case LOG_LEVEL_INFO:
+    b_level = LEVEL_INFO;
+    dbg_level = DBG_INFO; // 6
+    break;
+  case LOG_LEVEL_WARN:
+    b_level = LEVEL_WARN;
+    dbg_level = DBG_WARNING; // 4
+    break;
+  case LOG_LEVEL_ERROR:
+  case LOG_LEVEL_FATAL:
+    b_level = LEVEL_ERROR;
+    dbg_level = DBG_ERR; // 3
+    break;
+  default:
+    b_level = LEVEL_INFO;
+    dbg_level = DBG_INFO;
+    break;
+  }
+
+  log_info("BaresipManager",
+           "Setting Baresip Log Level to %d (Debug Level: %d)", b_level,
+           dbg_level);
+
+  // Set Baresip Log Level
+  log_level_set(b_level);
+
+  // Set re library Debug Level
+  // DBG_ALL enables ANSI colors and Timestamps
+  dbg_init(dbg_level, DBG_ALL);
 }

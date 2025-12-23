@@ -2984,6 +2984,160 @@ CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/lv_drivers/sdl/sdl.c -o CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.s
 
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/fakevideo/fakevideo.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_209) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/fakevideo/fakevideo.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/fakevideo/fakevideo.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/fakevideo/fakevideo.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/selfview/selfview.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_210) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/selfview/selfview.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/selfview/selfview.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/selfview/selfview.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/avcodec.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_211) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/avcodec.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/avcodec.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/avcodec.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/decode.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_212) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/decode.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/decode.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/decode.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/encode.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_213) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/encode.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/encode.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/encode.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/sdp.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_214) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/sdp.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/sdp.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcodec/sdp.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/avformat.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_215) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/avformat.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/avformat.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/avformat.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/audio.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_216) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/audio.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/audio.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/audio.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/video.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_217) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/video.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/video.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avformat/video.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/swscale/swscale.c
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_218) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/swscale/swscale.c
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/swscale/swscale.c > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/swscale/swscale.c -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.s
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o: CMakeFiles/baresip-lvgl.dir/flags.make
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o: /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcapture/avcapture.m
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o: CMakeFiles/baresip-lvgl.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_219) "Building C object CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o -MF CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o.d -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o -c /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcapture/avcapture.m
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcapture/avcapture.m > CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.i
+
+CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/steven/dev/baresip-lvgl/deps/baresip/modules/avcapture/avcapture.m -o CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.s
+
 # Object files for target baresip-lvgl
 baresip__lvgl_OBJECTS = \
 "CMakeFiles/baresip-lvgl.dir/src/applets/calculator_applet.c.o" \
@@ -3193,7 +3347,18 @@ baresip__lvgl_OBJECTS = \
 "CMakeFiles/baresip-lvgl.dir/lvgl/src/widgets/lv_table.c.o" \
 "CMakeFiles/baresip-lvgl.dir/lvgl/src/widgets/lv_textarea.c.o" \
 "CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl_common.c.o" \
-"CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.o"
+"CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o" \
+"CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o"
 
 # External object files for target baresip-lvgl
 baresip__lvgl_EXTERNAL_OBJECTS =
@@ -3406,11 +3571,22 @@ baresip-lvgl: CMakeFiles/baresip-lvgl.dir/lvgl/src/widgets/lv_table.c.o
 baresip-lvgl: CMakeFiles/baresip-lvgl.dir/lvgl/src/widgets/lv_textarea.c.o
 baresip-lvgl: CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl_common.c.o
 baresip-lvgl: CMakeFiles/baresip-lvgl.dir/lv_drivers/sdl/sdl.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/fakevideo/fakevideo.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/selfview/selfview.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/avcodec.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/decode.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/encode.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcodec/sdp.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/avformat.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/audio.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avformat/video.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/swscale/swscale.c.o
+baresip-lvgl: CMakeFiles/baresip-lvgl.dir/deps/baresip/modules/avcapture/avcapture.m.o
 baresip-lvgl: CMakeFiles/baresip-lvgl.dir/build.make
 baresip-lvgl: /Users/steven/dev/baresip-lvgl/deps/baresip/build/libbaresip.a
 baresip-lvgl: /Users/steven/dev/baresip-lvgl/deps/re/build/libre.a
 baresip-lvgl: CMakeFiles/baresip-lvgl.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_209) "Linking C executable baresip-lvgl"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/steven/dev/baresip-lvgl/build_cmake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_220) "Linking C executable baresip-lvgl"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/baresip-lvgl.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

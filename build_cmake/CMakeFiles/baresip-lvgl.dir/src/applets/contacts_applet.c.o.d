@@ -433,6 +433,7 @@ CMakeFiles/baresip-lvgl.dir/src/applets/contacts_applet.c.o: \
   /Users/steven/dev/baresip-lvgl/deps/re/include/re_shim.h \
   /Users/steven/dev/baresip-lvgl/deps/re/include/re_trice.h \
   /Users/steven/dev/baresip-lvgl/deps/re/include/re_pcp.h \
+  /Users/steven/dev/baresip-lvgl/src/applets/call_applet.h \
   /Users/steven/dev/baresip-lvgl/include/contact_manager.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/stdlib.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_stdlib.h \

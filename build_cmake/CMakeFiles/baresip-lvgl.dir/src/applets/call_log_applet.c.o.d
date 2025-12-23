@@ -433,4 +433,5 @@ CMakeFiles/baresip-lvgl.dir/src/applets/call_log_applet.c.o: \
   /Users/steven/dev/baresip-lvgl/deps/re/include/re_shim.h \
   /Users/steven/dev/baresip-lvgl/deps/re/include/re_trice.h \
   /Users/steven/dev/baresip-lvgl/deps/re/include/re_pcp.h \
+  /Users/steven/dev/baresip-lvgl/src/applets/call_applet.h \
   /Users/steven/dev/baresip-lvgl/include/history_manager.h

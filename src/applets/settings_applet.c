@@ -37,14 +37,8 @@ typedef struct {
   lv_obj_t *call_listen_addr_ta;
   lv_obj_t *call_addr_fam_dd;
   lv_obj_t *call_dns_ta;
-  lv_obj_t *call_tls_cert_sw;
-  lv_obj_t *call_verify_cert_sw;
-  lv_obj_t *call_tls_ca_sw;
-  lv_obj_t *call_ua_ta;
-  lv_obj_t *call_contacts_dd;
-  lv_obj_t *call_video_size_dd;
-  lv_obj_t *call_ringtone_btn;
 
+  lv_obj_t *call_video_size_dd;
   // Account form widgets
   lv_obj_t *form_name_ta;
   lv_obj_t *form_user_ta;
@@ -795,6 +789,8 @@ static void show_call_settings(settings_data_t *data) {
   // Header
   lv_obj_t *header = lv_obj_create(data->call_settings_screen);
   lv_obj_set_size(header, LV_PCT(100), 60);
+  lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
   lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
@@ -830,15 +826,11 @@ static void show_call_settings(settings_data_t *data) {
   data->call_start_auto_sw = create_switch_row(
       content, "Start Automatically", data->config.start_automatically);
 
-  // Log Level
-  data->call_log_level_dd = create_dropdown_row(
-      content, "Log Level", "TRACE\nDEBUG\nINFO\nWARN\nERROR\nFATAL",
-      data->config.log_level);
-
   lv_obj_t *listen_ta = lv_textarea_create(content);
   lv_obj_set_width(listen_ta, LV_PCT(100));
   lv_textarea_set_one_line(listen_ta, true);
-  lv_textarea_set_placeholder_text(listen_ta, "Listen Address");
+  lv_obj_set_scrollbar_mode(listen_ta, LV_SCROLLBAR_MODE_OFF);
+  lv_textarea_set_placeholder_text(listen_ta, "Listen Address (0.0.0.0:5060)");
   if (strlen(data->config.listen_address) > 0)
     lv_textarea_set_text(listen_ta, data->config.listen_address);
   data->call_listen_addr_ta = listen_ta;
@@ -850,51 +842,20 @@ static void show_call_settings(settings_data_t *data) {
   lv_obj_t *dns_ta = lv_textarea_create(content);
   lv_obj_set_width(dns_ta, LV_PCT(100));
   lv_textarea_set_one_line(dns_ta, true);
+  lv_obj_set_scrollbar_mode(dns_ta, LV_SCROLLBAR_MODE_OFF);
   lv_textarea_set_placeholder_text(dns_ta, "DNS Servers");
   if (strlen(data->config.dns_servers) > 0)
     lv_textarea_set_text(dns_ta, data->config.dns_servers);
   data->call_dns_ta = dns_ta;
 
-  data->call_tls_cert_sw = create_switch_row(content, "TLS Certificate File",
-                                             data->config.use_tls_client_cert);
-  data->call_verify_cert_sw = create_switch_row(
-      content, "Verify Server Certificates", data->config.verify_server_cert);
-  data->call_tls_ca_sw =
-      create_switch_row(content, "TLS CA File", data->config.use_tls_ca_file);
+  data->call_video_size_dd = create_dropdown_row(
+      content, "Video Frame Size", "1920x1080\n1280x720\n640x480\n320x240",
+      data->config.video_frame_size);
 
-  lv_obj_t *ua_ta = lv_textarea_create(content);
-  lv_obj_set_width(ua_ta, LV_PCT(100));
-  lv_textarea_set_one_line(ua_ta, true);
-  lv_textarea_set_placeholder_text(ua_ta, "User Agent");
-  if (strlen(data->config.user_agent) > 0)
-    lv_textarea_set_text(ua_ta, data->config.user_agent);
-  data->call_ua_ta = ua_ta;
-
-  // Audio Settings Header
-  lv_obj_t *audio_header = lv_label_create(content);
-  lv_label_set_text(audio_header, "Audio Settings");
-  lv_obj_set_style_text_font(audio_header, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_pad_top(audio_header, 20, 0);
-  lv_obj_set_style_pad_bottom(audio_header, 10, 0);
-
-  data->call_contacts_dd =
-      create_dropdown_row(content, "Contacts", "baresip\nLocal\nLDAP",
-                          data->config.contacts_source);
-
-  // Ringtone (Placeholder)
-  lv_obj_t *ringtone_row = lv_obj_create(content);
-  lv_obj_set_size(ringtone_row, LV_PCT(100), 50);
-  lv_obj_set_flex_flow(ringtone_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(ringtone_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_t *rt_lbl = lv_label_create(ringtone_row);
-  lv_label_set_text(rt_lbl, "Ringtone");
-  lv_obj_t *rt_val = lv_label_create(ringtone_row);
-  lv_label_set_text(rt_val, "Default"); // Static for now
-
-  data->call_video_size_dd = create_dropdown_row(content, "Video Frame Size",
-                                                 "1280x720\n640x480\n320x240",
-                                                 data->config.video_frame_size);
+  // Log Level
+  data->call_log_level_dd = create_dropdown_row(
+      content, "Log Level", "TRACE\nDEBUG\nINFO\nWARN\nERROR\nFATAL",
+      data->config.log_level);
 }
 
 static void save_call_settings(settings_data_t *data) {
@@ -906,30 +867,32 @@ static void save_call_settings(settings_data_t *data) {
 
   data->config.log_level = lv_dropdown_get_selected(data->call_log_level_dd);
   logger_set_level((log_level_t)data->config.log_level);
+  baresip_manager_set_log_level((log_level_t)data->config.log_level);
 
-  strncpy(data->config.listen_address,
-          lv_textarea_get_text(data->call_listen_addr_ta),
+  const char *addr_input = lv_textarea_get_text(data->call_listen_addr_ta);
+  char validated_addr[64];
+  if (strchr(addr_input, ':')) {
+    // Has port, copy as is
+    strncpy(validated_addr, addr_input, sizeof(validated_addr) - 1);
+  } else if (strlen(addr_input) > 0) {
+    // No port, append :5060
+    snprintf(validated_addr, sizeof(validated_addr), "%s:5060", addr_input);
+  } else {
+    // Empty, default
+    strcpy(validated_addr, "0.0.0.0:5060");
+  }
+  validated_addr[sizeof(validated_addr) - 1] = '\0';
+  strncpy(data->config.listen_address, validated_addr,
           sizeof(data->config.listen_address) - 1);
 
   int fam_idx = lv_dropdown_get_selected(data->call_addr_fam_dd);
   data->config.address_family =
       (fam_idx == 0) ? 1 : 2; // 0->IPv4(1), 1->IPv6(2)
 
+  // Basic DNS validation (ensure not empty / comma format check if needed)
   strncpy(data->config.dns_servers, lv_textarea_get_text(data->call_dns_ta),
           sizeof(data->config.dns_servers) - 1);
 
-  data->config.use_tls_client_cert =
-      lv_obj_has_state(data->call_tls_cert_sw, LV_STATE_CHECKED);
-  data->config.verify_server_cert =
-      lv_obj_has_state(data->call_verify_cert_sw, LV_STATE_CHECKED);
-  data->config.use_tls_ca_file =
-      lv_obj_has_state(data->call_tls_ca_sw, LV_STATE_CHECKED);
-
-  strncpy(data->config.user_agent, lv_textarea_get_text(data->call_ua_ta),
-          sizeof(data->config.user_agent) - 1);
-
-  data->config.contacts_source =
-      lv_dropdown_get_selected(data->call_contacts_dd);
   data->config.video_frame_size =
       lv_dropdown_get_selected(data->call_video_size_dd);
 
@@ -1156,6 +1119,8 @@ static int settings_init(applet_t *applet) {
   // --- MAIN SCREEN ---
   lv_obj_t *header = lv_obj_create(data->main_screen);
   lv_obj_set_size(header, LV_PCT(100), 60);
+  lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
   lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
@@ -1189,6 +1154,8 @@ static int settings_init(applet_t *applet) {
   // --- ACCOUNT SETTINGS SCREEN (ACCOUNTS LIST) ---
   lv_obj_t *call_header = lv_obj_create(data->account_settings_screen);
   lv_obj_set_size(call_header, LV_PCT(100), 60);
+  lv_obj_set_scrollbar_mode(call_header, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(call_header, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_align(call_header, LV_ALIGN_TOP_MID, 0, 0);
   lv_obj_set_flex_flow(call_header, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(call_header, LV_FLEX_ALIGN_SPACE_BETWEEN,
@@ -1241,6 +1208,8 @@ static int settings_init(applet_t *applet) {
   // --- ACCOUNT FORM SCREEN ---
   lv_obj_t *form_header = lv_obj_create(data->account_form_screen);
   lv_obj_set_size(form_header, LV_PCT(100), 60);
+  lv_obj_set_scrollbar_mode(form_header, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_clear_flag(form_header, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_align(form_header, LV_ALIGN_TOP_MID, 0, 0);
   lv_obj_set_flex_flow(form_header, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(form_header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,

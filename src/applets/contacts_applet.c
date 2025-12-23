@@ -16,14 +16,85 @@ static bool is_new_contact = false;
 static applet_t *g_applet = NULL;
 
 // Account Picker State
+// Account Picker State
 static char g_pending_number[128] = {0};
 static bool g_pending_is_video = false;
+
 static lv_obj_t *g_account_picker_modal = NULL;
+
+// Context Menu State
+// Context Menu State
+static lv_obj_t *g_context_menu_modal = NULL;
+static contact_t g_context_menu_contact;
+static bool g_long_press_handled = false;
 
 // Forward declarations
 static void refresh_ui(void);
 static void draw_list(void);
 static void draw_editor(void);
+static void contact_long_press_handler(lv_event_t *e);
+
+static bool g_return_to_caller = false;
+
+static bool g_preserve_view = false;
+
+// External API to open editor with number (for Call Log "Add To Contact")
+void contacts_applet_open_new(const char *number) {
+  if (!g_applet)
+    return; // Should not happen if applet manager handles init
+
+  // Ensure we are initialized
+  cm_init();
+
+  is_editor_mode = true;
+  is_new_contact = true;
+  g_return_to_caller = true; // Set flag to return to previous applet on back
+  g_preserve_view = true;    // Instruct resume to NOT reset to list
+  memset(&current_edit_contact, 0, sizeof(contact_t));
+  if (number) {
+    strncpy(current_edit_contact.number, number,
+            sizeof(current_edit_contact.number) - 1);
+  }
+  refresh_ui();
+}
+
+// ... (omitted) ...
+
+static int contacts_init(applet_t *applet) {
+  log_info("ContactsApplet", "Initializing");
+  g_applet = applet;
+  is_editor_mode = false;
+  g_preserve_view = false;
+  refresh_ui();
+  return 0;
+}
+
+static void contacts_start(applet_t *applet) {
+  (void)applet;
+  // On start (first launch or after stop), default to list
+  if (!g_preserve_view) {
+    if (is_editor_mode) {
+      is_editor_mode = false;
+      refresh_ui();
+    }
+  }
+  g_preserve_view = false;
+}
+
+static void contacts_pause(applet_t *applet) { (void)applet; }
+
+static void contacts_resume(applet_t *applet) {
+  (void)applet;
+  if (g_preserve_view) {
+    g_preserve_view = false;
+    return;
+  }
+  // Otherwise, ensure list view
+  if (is_editor_mode) {
+    is_editor_mode = false;
+    refresh_ui();
+  }
+}
 
 // Helper: Create standardized avatar
 static lv_obj_t *create_avatar(lv_obj_t *parent, const char *name, int size) {
@@ -52,6 +123,11 @@ static lv_obj_t *create_avatar(lv_obj_t *parent, const char *name, int size) {
 
 static void back_btn_clicked(lv_event_t *e) {
   if (is_editor_mode) {
+    if (g_return_to_caller) {
+      g_return_to_caller = false;
+      applet_manager_back();
+      return;
+    }
     is_editor_mode = false;
     refresh_ui();
   } else {
@@ -143,6 +219,8 @@ static void account_picker_item_clicked(lv_event_t *e) {
       close_picker_modal();
       call_applet_request_active_view();
       applet_manager_launch_applet(&call_applet);
+    } else {
+      applet_manager_show_toast("Account not available.");
     }
   }
 }
@@ -231,6 +309,10 @@ static void show_account_picker(const char *number, bool is_video) {
 // ------------------- HANDLERS -------------------
 
 static void contact_item_clicked(lv_event_t *e) {
+  if (g_long_press_handled) {
+    g_long_press_handled = false;
+    return;
+  }
   const contact_t *c = (const contact_t *)lv_event_get_user_data(e);
   if (!c)
     return;
@@ -253,6 +335,8 @@ static void contact_item_clicked(lv_event_t *e) {
       if (baresip_manager_call_with_account(c->number, aor) == 0) {
         call_applet_request_active_view();
         applet_manager_launch_applet(&call_applet);
+      } else {
+        applet_manager_show_toast("Account not available.");
       }
       return;
     }
@@ -286,6 +370,8 @@ static void contact_video_clicked(lv_event_t *e) {
       if (baresip_manager_videocall_with_account(c->number, aor) == 0) {
         call_applet_request_active_view();
         applet_manager_launch_applet(&call_applet);
+      } else {
+        applet_manager_show_toast("Account not available.");
       }
       return;
     }
@@ -352,6 +438,8 @@ static void draw_list(void) {
     lv_obj_set_size(item, LV_PCT(100), 70);
     lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(item, contact_item_clicked, LV_EVENT_CLICKED,
+                        (void *)c);
+    lv_obj_add_event_cb(item, contact_long_press_handler, LV_EVENT_LONG_PRESSED,
                         (void *)c);
 
     lv_obj_t *avatar = create_avatar(item, c->name, 50);
@@ -490,8 +578,7 @@ static void draw_editor(void) {
   lv_obj_t *name_ta = lv_textarea_create(content);
   lv_textarea_set_one_line(name_ta, true);
   lv_obj_set_width(name_ta, LV_PCT(90));
-  lv_textarea_set_text(name_ta,
-                       is_new_contact ? "" : current_edit_contact.name);
+  lv_textarea_set_text(name_ta, current_edit_contact.name);
   lv_textarea_set_placeholder_text(name_ta, "Name");
 
   lv_obj_t *num_lbl = lv_label_create(content);
@@ -502,8 +589,7 @@ static void draw_editor(void) {
   lv_obj_t *num_ta = lv_textarea_create(content);
   lv_textarea_set_one_line(num_ta, true);
   lv_obj_set_width(num_ta, LV_PCT(90));
-  lv_textarea_set_text(num_ta,
-                       is_new_contact ? "" : current_edit_contact.number);
+  lv_textarea_set_text(num_ta, current_edit_contact.number);
   lv_textarea_set_placeholder_text(num_ta, "sip:user@domain");
 
   lv_obj_t *fav_cont = lv_obj_create(content);
@@ -556,14 +642,19 @@ static void draw_editor(void) {
     lv_obj_add_event_cb(call_btn, contact_item_clicked, LV_EVENT_CLICKED,
                         (void *)&current_edit_contact);
   }
-
   if (!is_new_contact) {
-    lv_obj_t *del_btn = lv_btn_create(content);
-    lv_obj_set_size(del_btn, LV_PCT(50), 40);
+    // Delete Button at Bottom Center with 25px margin
+    lv_obj_t *del_btn = lv_btn_create(
+        g_applet->screen); // Parent is screen to be fixed relative to it
+    lv_obj_add_flag(del_btn, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(del_btn, 140, 50);
+    lv_obj_align(del_btn, LV_ALIGN_BOTTOM_MID, 0, -25);
     lv_obj_set_style_bg_color(del_btn, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_radius(del_btn, 25, 0); // Rounded pill
+    lv_obj_set_style_shadow_width(del_btn, 10, 0);
 
     lv_obj_t *del_lbl = lv_label_create(del_btn);
-    lv_label_set_text(del_lbl, "Delete Contact");
+    lv_label_set_text(del_lbl, LV_SYMBOL_TRASH "  Delete");
     lv_obj_center(del_lbl);
 
     lv_obj_add_event_cb(del_btn, delete_btn_clicked, LV_EVENT_CLICKED, NULL);
@@ -575,6 +666,185 @@ static void draw_editor(void) {
   inputs[2] = fav_sw;
 
   lv_obj_add_event_cb(save_btn, save_btn_clicked, LV_EVENT_CLICKED, inputs);
+}
+
+// ------------------- CONTEXT MENU -------------------
+
+static void close_context_menu(void) {
+  if (g_context_menu_modal) {
+    lv_obj_del(g_context_menu_modal);
+    g_context_menu_modal = NULL;
+  }
+}
+
+static void context_menu_cancel(lv_event_t *e) { close_context_menu(); }
+
+static void context_menu_delete(lv_event_t *e) {
+  cm_remove(g_context_menu_contact.id);
+  close_context_menu();
+  refresh_ui();
+}
+
+static void context_menu_toggle_fav(lv_event_t *e) {
+  bool new_fav = !g_context_menu_contact.is_favorite;
+  cm_update(g_context_menu_contact.id, g_context_menu_contact.name,
+            g_context_menu_contact.number, new_fav);
+  close_context_menu();
+  refresh_ui();
+}
+
+// Helper to create a menu button
+static lv_obj_t *create_menu_btn(lv_obj_t *parent, const char *icon,
+                                 const char *text, bool is_red,
+                                 lv_event_cb_t event_cb) {
+  lv_obj_t *btn = lv_btn_create(parent);
+  lv_obj_set_size(btn, LV_PCT(100), 50);
+  lv_obj_set_style_bg_opa(btn, 0, 0);
+  lv_obj_set_style_shadow_width(btn, 0, 0);
+  lv_obj_set_style_pad_left(btn, 20, 0);
+
+  // Layout: Icon + Text + Spacer
+  lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_gap(btn, 15, 0);
+
+  lv_obj_t *icon_lbl = lv_label_create(btn);
+  lv_label_set_text(icon_lbl, icon);
+  lv_obj_set_style_text_font(icon_lbl, &lv_font_montserrat_24,
+                             0); // Larger icon
+
+  lv_obj_t *text_lbl = lv_label_create(btn);
+  lv_label_set_text(text_lbl, text);
+  lv_obj_set_style_text_font(text_lbl, &lv_font_montserrat_16, 0);
+
+  if (is_red) {
+    lv_obj_set_style_text_color(icon_lbl, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_text_color(text_lbl, lv_palette_main(LV_PALETTE_RED), 0);
+  } else {
+    lv_obj_set_style_text_color(icon_lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_color(text_lbl, lv_color_black(), 0);
+  }
+
+  if (event_cb) {
+    lv_obj_add_event_cb(btn, event_cb, LV_EVENT_CLICKED, NULL);
+  }
+
+  return btn;
+}
+
+static void show_contact_context_menu(const contact_t *c) {
+  if (g_context_menu_modal)
+    return;
+
+  g_context_menu_contact = *c;
+
+  // 1. Overlay
+  g_context_menu_modal = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(g_context_menu_modal, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(g_context_menu_modal, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(g_context_menu_modal, LV_OPA_40, 0); // Dimmed
+  lv_obj_add_event_cb(g_context_menu_modal, context_menu_cancel,
+                      LV_EVENT_CLICKED, NULL);
+
+  // Container
+  lv_obj_t *container = lv_obj_create(g_context_menu_modal);
+  lv_obj_set_size(container, 300, LV_SIZE_CONTENT);
+  lv_obj_center(container);
+  lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_bg_opa(container, 0, 0);
+  lv_obj_set_style_border_width(container, 0, 0);
+  lv_obj_set_style_pad_all(container, 0, 0);
+  lv_obj_set_style_pad_gap(container, 15, 0);
+
+  // 2. Preview Item
+  lv_obj_t *preview = lv_obj_create(container);
+  lv_obj_set_size(preview, LV_PCT(100), 80);
+  lv_obj_set_style_bg_color(preview, lv_color_white(), 0);
+  lv_obj_set_style_radius(preview, 15, 0);
+  lv_obj_set_flex_flow(preview, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(preview, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_all(preview, 15, 0);
+  lv_obj_set_style_pad_gap(preview, 15, 0);
+  lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Avatar
+  lv_obj_t *avatar = lv_obj_create(preview);
+  lv_obj_set_size(avatar, 50, 50);
+  lv_obj_set_style_radius(avatar, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(avatar, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_set_style_bg_opa(avatar, LV_OPA_20, 0);
+  lv_obj_set_style_border_width(avatar, 0, 0);
+  lv_obj_clear_flag(avatar, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *avatar_txt = lv_label_create(avatar);
+  lv_label_set_text(avatar_txt, LV_SYMBOL_FILE);
+  lv_obj_set_style_text_color(avatar_txt, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_set_style_text_font(avatar_txt, &lv_font_montserrat_24, 0);
+  lv_obj_center(avatar_txt);
+
+  // Info
+  lv_obj_t *text_col = lv_obj_create(preview);
+  lv_obj_set_size(text_col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(text_col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_bg_opa(text_col, 0, 0);
+  lv_obj_set_style_border_width(text_col, 0, 0);
+  lv_obj_set_style_pad_all(text_col, 0, 0);
+  lv_obj_set_style_pad_gap(text_col, 2, 0);
+  lv_obj_set_flex_grow(text_col, 1);
+
+  lv_obj_t *name_lbl = lv_label_create(text_col);
+  lv_label_set_text(name_lbl, c->name);
+  lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(name_lbl, lv_color_black(), 0);
+
+  lv_obj_t *num_lbl = lv_label_create(text_col);
+  lv_label_set_text(num_lbl, c->number);
+  lv_obj_set_style_text_font(num_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(num_lbl, lv_palette_main(LV_PALETTE_GREY), 0);
+
+  // 3. Menu
+  lv_obj_t *menu = lv_obj_create(container);
+  lv_obj_set_size(menu, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_style_bg_color(menu, lv_color_white(), 0);
+  lv_obj_set_style_radius(menu, 15, 0);
+  lv_obj_set_flex_flow(menu, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(menu, 0, 0);
+  lv_obj_set_style_pad_gap(menu, 0, 0);
+  lv_obj_set_style_clip_corner(menu, true, 0);
+
+  // Divider style
+  static lv_style_t div_style;
+  static bool div_inited = false;
+  if (!div_inited) {
+    lv_style_init(&div_style);
+    lv_style_set_bg_color(&div_style, lv_palette_lighten(LV_PALETTE_GREY, 4));
+    lv_style_set_bg_opa(&div_style, LV_OPA_COVER);
+    lv_style_set_height(&div_style, 1);
+    lv_style_set_width(&div_style, LV_PCT(100));
+    div_inited = true;
+  }
+
+  // Favorite (Text depends on state)
+  create_menu_btn(menu, LV_SYMBOL_OK,
+                  c->is_favorite ? "Unfavorite" : "Favorite", false,
+                  context_menu_toggle_fav);
+  lv_obj_t *div4 = lv_obj_create(menu);
+  lv_obj_add_style(div4, &div_style, 0);
+
+  // Delete
+  create_menu_btn(menu, LV_SYMBOL_TRASH, "Delete Contact", true,
+                  context_menu_delete);
+}
+
+static void contact_long_press_handler(lv_event_t *e) {
+  const contact_t *c = (const contact_t *)lv_event_get_user_data(e);
+  if (!c)
+    return;
+
+  g_long_press_handled = true;
+  show_contact_context_menu(c);
 }
 
 static void refresh_ui(void) {
@@ -589,17 +859,9 @@ static void refresh_ui(void) {
   }
 }
 
-static int contacts_init(applet_t *applet) {
-  log_info("ContactsApplet", "Initializing");
-  g_applet = applet;
-  is_editor_mode = false;
-  refresh_ui();
-  return 0;
-}
+// contacts_init, contacts_start, contacts_resume are defined above with the
+// implementation logic. Removing empty placeholders.
 
-static void contacts_start(applet_t *applet) { (void)applet; }
-static void contacts_pause(applet_t *applet) { (void)applet; }
-static void contacts_resume(applet_t *applet) { (void)applet; }
 static void contacts_stop(applet_t *applet) { (void)applet; }
 static void contacts_destroy(applet_t *applet) { (void)applet; }
 
