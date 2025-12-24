@@ -2019,13 +2019,17 @@ static int call_init(applet_t *applet) {
   lv_obj_clear_flag(data->video_remote, LV_OBJ_FLAG_SCROLLABLE);
 
   // Local Video (PiP)
+  // Local Video (PiP)
   data->video_local =
       lv_obj_create(data->active_call_screen); // Move PiP to Top Layer as well
   lv_obj_remove_style_all(data->video_local);
-  lv_obj_set_style_bg_opa(data->video_local, 0, 0);
+  lv_obj_set_style_bg_color(data->video_local, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(data->video_local, LV_OPA_TRANSP, 0); // Transparent
   lv_obj_set_size(data->video_local, 160, 120);
   lv_obj_align(data->video_local, LV_ALIGN_TOP_RIGHT, -20, 20);
-  lv_obj_set_style_border_width(data->video_local, 0, 0); // No Border
+  // Debug Border
+  lv_obj_set_style_border_width(data->video_local, 2, 0);
+  lv_obj_set_style_border_color(data->video_local, lv_color_hex(0xFF0000), 0);
   lv_obj_move_foreground(
       data->video_local); // Ensure PiP is on top of everything
 

@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE 1
+#define _BSD_SOURCE 1
 #include "baresip_manager.h"
 #include "config_manager.h"
 #include "history_manager.h"
@@ -16,7 +18,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 // Helper to check if string is empty
@@ -27,8 +31,13 @@ extern const struct mod_export exports_opus;
 extern const struct mod_export exports_account;
 extern const struct mod_export exports_stun;
 extern const struct mod_export exports_turn;
+#ifdef __APPLE__
 extern const struct mod_export exports_audiounit;
 extern const struct mod_export exports_coreaudio;
+#elif defined(__linux__)
+extern const struct mod_export exports_alsa;
+extern const struct mod_export exports_v4l2;
+#endif
 
 #define MAX_ACCOUNTS 10
 
@@ -508,16 +517,15 @@ static int sdl_vidisp_alloc(struct vidisp_st **stp, const struct vidisp *vd,
   struct vidisp_st *st;
   int err;
 
-  // Determine if this is the local self-view
-  // We check for specific device names OR if the display module instance
-  // matches our registered local video display alias (vid2)
-  // ALSO: If dev is NULL, it is likely the 'selfview' module allocating (remote
-  // streams imply a peer name)
-  bool is_local =
-      (!dev) ||
-      (dev && (strcmp(dev, "local") == 0 || strcmp(dev, "selfview") == 0 ||
-               strcmp(dev, "window") == 0)) ||
-      (vd == vid2);
+  log_info("BaresipManager", "sdl_vidisp_alloc: Request for dev='%s'",
+           dev ? dev : "NULL");
+
+  // Determine if this is the local self-view by checking the module instance
+  bool is_local = (vd == vid2);
+
+  log_info("BaresipManager",
+           "sdl_vidisp_alloc: dev='%s' vd=%p vid2=%p is_local=%d",
+           dev ? dev : "NULL", vd, vid2, is_local);
 
   (void)dev;
   (void)resizeh;
@@ -868,6 +876,7 @@ static void create_default_config(const char *config_path) {
                "module_load\t\tcoreaudio.so\n"
                "module_load\t\tselfview.so\n"
 #endif
+               "module_load\t\tfakevideo.so\n"
                "module_load\t\topus.so\n"
                "# Network Modules\n"
                "module_load\t\tudp.so\n"
@@ -877,7 +886,7 @@ static void create_default_config(const char *config_path) {
                "module_load\t\tturn.so\n"
                "module_load\t\toutbound.so\n"
                "# Selfview\n"
-               "video_selfview\t\twindow\n"
+               "video_selfview\t\tsdl_vidisp\n"
                "# Keepalive\n"
                "sip_keepalive_interval\t15\n");
     fclose(f);
@@ -917,65 +926,65 @@ static void check_and_fix_audio_config(const char *config_path) {
 }
 
 // Check and append keepalive setting if missing
-static void check_and_append_keepalive(const char *config_path) {
-  check_and_fix_audio_config(config_path);
+static void patch_config_file(const char *config_path) {
+  char temp_path[512];
+  snprintf(temp_path, sizeof(temp_path), "%s.tmp", config_path);
 
-  FILE *f_check_ka = fopen(config_path, "r");
-  bool has_keepalive = false;
-  if (f_check_ka) {
-    char line[256];
-    while (fgets(line, sizeof(line), f_check_ka)) {
-      if (strstr(line, "sip_keepalive_interval")) {
-        has_keepalive = true;
-        break;
-      }
-    }
-    fclose(f_check_ka);
+  FILE *f_in = fopen(config_path, "r");
+  FILE *f_out = fopen(temp_path, "w");
+
+  if (!f_in) {
+    log_warn("BaresipManager", "Config file not found for patching, skipping.");
+    if (f_out)
+      fclose(f_out);
+    return;
+  }
+  if (!f_out) {
+    log_error("BaresipManager", "Failed to open temp config file for writing");
+    fclose(f_in);
+    return;
   }
 
-  if (!has_keepalive) {
-    FILE *f_append = fopen(config_path, "a");
-    if (f_append) {
-      fprintf(f_append, "\n# Keepalive\nsip_keepalive_interval\t15\n");
-      fclose(f_append);
-      log_info("BaresipManager", "Appended missing keepalive config");
-    }
-  }
+  char line[512];
+  bool selfview_found = false;
+  bool keepalive_found = false;
 
-  // Check for video_selfview
-  bool has_selfview = false;
-  f_check_ka = fopen(config_path, "r");
-  if (f_check_ka) {
-    char line[256];
-    while (fgets(line, sizeof(line), f_check_ka)) {
-      if (strstr(line, "video_selfview")) {
-        has_selfview = true;
-        break;
-      }
-    }
-    fclose(f_check_ka);
-  }
-
-  if (!has_selfview) {
-    FILE *f_append = fopen(config_path, "a");
-    if (f_append) {
-      fprintf(f_append, "\n# Selfview\nvideo_selfview\t\twindow\n");
-      fclose(f_append);
+  while (fgets(line, sizeof(line), f_in)) {
+    // Check for video_selfview (Loose match to handle whitespace)
+    if (strstr(line, "video_selfview")) {
+      fprintf(f_out, "video_selfview\t\twindow\n");
+      selfview_found = true;
       log_info("BaresipManager",
-               "Appended missing video_selfview config (window)");
+               "Patched video_selfview to window (Matched line: %s)", line);
+    }
+    // Check for keepalive
+    else if (strstr(line, "sip_keepalive_interval")) {
+      fprintf(f_out, "%s", line);
+      keepalive_found = true;
+    } else {
+      fprintf(f_out, "%s", line);
     }
   }
 
-  // Enforce avcapture on macOS (simple check)
-#ifdef __APPLE__
-  // Logic to replace video_source fakevideo with avcapture if found?
-  // For now, let's rely on create_default checks or just warn.
-  // The baresip_init code forces cfg->video.src_mod anyway if we use my
-  // previous edit. Wait, I removed the programmatic force? No, I updated it. I
-  // will rely on the programmatic update I made in step 140 (which was
-  // successful in content, just conf_set failed). So config file check is
-  // backup.
-#endif
+  if (!selfview_found) {
+    fprintf(f_out, "\n# Selfview\nvideo_selfview\t\twindow\n");
+    log_info("BaresipManager", "Appended video_selfview config");
+  }
+
+  if (!keepalive_found) {
+    fprintf(f_out, "\n# Keepalive\nsip_keepalive_interval\t15\n");
+    log_info("BaresipManager", "Appended sip_keepalive_interval config");
+  }
+
+  fclose(f_in);
+  fclose(f_out);
+
+  if (rename(temp_path, config_path) != 0) {
+    log_error("BaresipManager", "Failed to replace config file after patching");
+    remove(temp_path);
+  } else {
+    log_info("BaresipManager", "Config file patched successfully");
+  }
 }
 
 // Test harness for video verification
@@ -1038,9 +1047,9 @@ int baresip_manager_init(void) {
 
     if (file_size == 0) {
       create_default_config(config_path);
-    } else {
-      check_and_append_keepalive(config_path);
     }
+    // 2. Patch config file (Robustly ensure selfview=sdl_vidisp and keepalive)
+    patch_config_file(config_path);
 
     log_info("BaresipManager", "Config dir: %s", home_dir);
   }
@@ -1151,6 +1160,9 @@ int baresip_manager_init(void) {
   snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "audiounit");
   snprintf(cfg->audio.alert_mod, sizeof(cfg->audio.alert_mod), "audiounit");
 
+  // Force video source
+  snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "avcapture");
+
   // Audio Device Tuning (Fix for "unsmoothy" audio)
   cfg->audio.adaptive = true;
   cfg->audio.buffer.min = 100; // Minimum device buffer 100ms
@@ -1164,21 +1176,54 @@ int baresip_manager_init(void) {
   log_info(
       "BaresipManager",
       "Audio tuning applied: Device=[100-300ms], Network(AVT)=[100-500ms]");
+#elif defined(__linux__)
+  // FORCE audio driver to alsa on Linux, ignoring config file errors
+  log_info("BaresipManager", "Forcing audio driver to 'alsa' for Linux...");
+  snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "alsa");
+  snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "alsa");
+  snprintf(cfg->audio.alert_mod, sizeof(cfg->audio.alert_mod), "alsa");
+
+  // Force video source to v4l2 on Linux if device exists, else fakevideo
+  // Check for /dev/video0
+  if (access("/dev/video0", F_OK) == 0) {
+    log_info("BaresipManager", "Found /dev/video0 - Using v4l2");
+    snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "v4l2");
+    snprintf(cfg->video.src_dev, sizeof(cfg->video.src_dev), "/dev/video0");
+  } else {
+    log_warn("BaresipManager",
+             "/dev/video0 NOT FOUND - Fallback to 'fakevideo'");
+    snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "fakevideo");
+    // fakevideo doesn't need a dev, or we can pass params
+    snprintf(cfg->video.src_dev, sizeof(cfg->video.src_dev), "");
+  }
+
+  log_info("BaresipManager", "Video Config Forced: Mod='%s', Dev='%s'",
+           cfg->video.src_mod, cfg->video.src_dev);
+
+  // Set default device to "default" (uses dmix/dsnoop usually)
+  snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "default");
+  snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "default");
+  snprintf(cfg->audio.alert_dev, sizeof(cfg->audio.alert_dev), "default");
+
+  // Audio Device Tuning for Linux/ALSA
+  cfg->audio.adaptive = true;
+  cfg->audio.buffer.min = 40; // ALSA often handles lower latency usage better
+  cfg->audio.buffer.max = 200;
+
+  log_info("BaresipManager", "Audio tuning applied (Linux)");
 #endif
 
   // Video
-  // Default to avcapture on Apple, v4l2 on Linux if not set
-  if (strlen(cfg->video.src_mod) == 0) {
-#ifdef __APPLE__
-    re_snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "avcapture");
-#else
-    re_snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "v4l2");
-#endif
-  }
+  // Video config handled in platform blocks above
 
   // Ensure we use our custom display module
   re_snprintf(cfg->video.disp_mod, sizeof(cfg->video.disp_mod), "sdl_vidisp");
+
   cfg->video.enc_fmt = VID_FMT_YUV420P;
+  cfg->video.width = 640;
+  cfg->video.height = 480;
+  cfg->video.fps = 30;
+  cfg->video.bitrate = 1000000; // 1 Mbps cap
 
   // Initialize Baresip core (Must be FIRST to init lists)
   err = baresip_init(cfg);
@@ -1201,6 +1246,9 @@ int baresip_manager_init(void) {
 #ifdef __APPLE__
   extern const struct mod_export exports_audiounit;
   mod_add(&m, &exports_audiounit);
+#elif defined(__linux__)
+  extern const struct mod_export exports_alsa;
+  mod_add(&m, &exports_alsa);
 #endif
 
   // Video Codecs & Formats
@@ -1230,6 +1278,9 @@ int baresip_manager_init(void) {
 #ifdef __APPLE__
   extern const struct mod_export exports_avcapture;
   mod_add(&m, &exports_avcapture);
+#elif defined(__linux__)
+  extern const struct mod_export exports_v4l2;
+  mod_add(&m, &exports_v4l2);
 #endif
 
   // Register selfview module to enable local video looping
@@ -1301,27 +1352,30 @@ int baresip_manager_init(void) {
 static int sdl_vidisp_init(void) {
   int err = 0;
   if (!vid) {
+    // Register LOCAL display (sdl_vidisp_self) FIRST
+    // This allows vidisp_alloc((NULL, NULL)) to find THIS module first
+    // (default)
+    err = vidisp_register(&vid2, baresip_vidispl(), "sdl_vidisp_self",
+                          sdl_vidisp_alloc, sdl_vidisp_update, sdl_vidisp_disp,
+                          sdl_vidisp_hide);
+    if (err) {
+      log_error("BaresipManager", "Failed to register sdl_vidisp_self: %d",
+                err);
+      return err;
+    }
+
+    // Register REMOTE display (sdl_vidisp) SECOND
+    // Found by explicit name lookup
     err =
         vidisp_register(&vid, baresip_vidispl(), "sdl_vidisp", sdl_vidisp_alloc,
                         sdl_vidisp_update, sdl_vidisp_disp, sdl_vidisp_hide);
     if (err) {
-      log_warn("BaresipManager", "Failed to register sdl_vidisp: %d", err);
+      log_error("BaresipManager", "Failed to register sdl_vidisp: %d", err);
       return err;
-    } else {
-      log_info("BaresipManager", "Registered sdl_vidisp module");
     }
-  }
 
-  // Also register 'window' alias for selfview
-  if (!vid2) {
-    err = vidisp_register(&vid2, baresip_vidispl(), "window", sdl_vidisp_alloc,
-                          sdl_vidisp_update, sdl_vidisp_disp, sdl_vidisp_hide);
-    if (err) {
-      log_warn("BaresipManager", "Failed to register window alias: %d", err);
-    } else {
-      log_info("BaresipManager",
-               "Registered window alias for local video (inside sdl_vidisp)");
-    }
+    log_info("BaresipManager",
+             "Registered sdl_vidisp and sdl_vidisp_self modules (Self-first)");
   }
   return err;
 }

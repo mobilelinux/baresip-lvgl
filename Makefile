@@ -15,22 +15,53 @@ OBJ_DIR = $(BUILD_DIR)/obj
 
 # Compiler and flags
 CC = gcc
+UNAME_S := $(shell uname -s)
+
+# Common CFLAGS
 COMMON_CFLAGS = -Wall -Wextra -O2 -I$(INC_DIR) -I$(LVGL_DIR) -I$(LV_DRIVERS_DIR) -I. \
                  -I deps/baresip/include -I deps/re/include \
                  $(shell sdl2-config --cflags) \
                  $(shell pkg-config --cflags libavcodec libavutil libavformat libswscale libswresample opus) \
-                 -I/opt/homebrew/include -DSTATIC
+                 -DSTATIC
 
-CFLAGS = $(COMMON_CFLAGS) -std=c99
-OBJCFLAGS = $(COMMON_CFLAGS) -fno-objc-arc
-
-LDFLAGS = -L/opt/homebrew/lib -lm $(shell sdl2-config --libs) \
-          deps/baresip/build/libbaresip.a \
-          deps/re/build/libre.a \
+# Platform Specific Configuration
+ifeq ($(UNAME_S),Linux)
+    # Linux
+    PLATFORM_CFLAGS = $(shell pkg-config --cflags alsa libv4l2) -D__linux__ -D_DEFAULT_SOURCE -D_BSD_SOURCE
+    
+    # Check for optional dependencies that baresip might have built modules for
+    OPTIONAL_DEPS = libpng sndfile aom x11 xext portaudio-2.0 opencore-amrnb libpulse glib-2.0 gobject-2.0 gio-2.0 dbus-1
+    OPTIONAL_LDFLAGS = $(shell for pkg in $(OPTIONAL_DEPS); do pkg-config --exists $$pkg && pkg-config --libs $$pkg; done)
+    
+    PLATFORM_LDFLAGS = $(shell pkg-config --libs alsa libv4l2) $(OPTIONAL_LDFLAGS) \
+                       -lssl -lcrypto -lpthread -lz -lopus -lresolv -lsqlite3 -lm \
+                       -lavcodec -lavdevice -lavfilter -lavformat -lavutil -lswresample -lswscale \
+                       -lx264 -lvpx 
+    
+    AUDIO_MOD_SRC = deps/baresip/modules/alsa/alsa.c deps/baresip/modules/alsa/alsa_src.c deps/baresip/modules/alsa/alsa_play.c
+    VIDEO_MOD_SRC = deps/baresip/modules/v4l2/v4l2.c
+    MODULE_SRCS_OBJC = 
+else
+    # macOS (Darwin)
+    PLATFORM_CFLAGS = -I/opt/homebrew/include
+    PLATFORM_LDFLAGS = -L/opt/homebrew/lib \
           -lssl -lcrypto -lpthread -lz -lopus -lresolv -lsqlite3 \
           -lavcodec -lavdevice -lavfilter -lavformat -lavutil -lswresample -lswscale \
-          -lx264 -lvpx \
+          -lx264 -lvpx -lpng -lsndfile -laom $(shell pkg-config --libs x11 xext portaudio-2.0 opencore-amrnb) \
           -framework CoreAudio -framework AudioToolbox -framework CoreFoundation -framework SystemConfiguration -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Foundation
+
+    AUDIO_MOD_SRC = deps/baresip/modules/audiounit/audiounit.c
+    VIDEO_MOD_SRC = 
+    MODULE_SRCS_OBJC = deps/baresip/modules/avcapture/avcapture.m
+endif
+
+CFLAGS = $(COMMON_CFLAGS) $(PLATFORM_CFLAGS) -std=c99
+OBJCFLAGS = $(COMMON_CFLAGS) $(PLATFORM_CFLAGS) -fno-objc-arc
+
+LDFLAGS = -lm $(shell sdl2-config --libs) \
+          deps/baresip/build/libbaresip.a \
+          deps/re/build/libre.a \
+          $(PLATFORM_LDFLAGS)
 
 
 # Source files
@@ -74,12 +105,13 @@ MODULE_SRCS = deps/baresip/modules/avcodec/avcodec.c \
               deps/baresip/modules/avformat/video.c \
               deps/baresip/modules/avformat/audio.c \
               deps/baresip/modules/swscale/swscale.c \
-    src/modules/gb28181/gb28181.c \
+              src/modules/gb28181/gb28181.c \
               deps/baresip/modules/fakevideo/fakevideo.c \
               deps/baresip/modules/selfview/selfview.c \
               deps/baresip/modules/g711/g711.c \
               deps/baresip/modules/opus/opus.c \
-              deps/baresip/modules/audiounit/audiounit.c \
+              $(AUDIO_MOD_SRC) \
+              $(VIDEO_MOD_SRC) \
               deps/baresip/modules/stun/stun.c \
               deps/baresip/modules/turn/turn.c \
               deps/baresip/modules/ice/ice.c
@@ -87,7 +119,7 @@ MODULE_SRCS = deps/baresip/modules/avcodec/avcodec.c \
 MODULE_OBJS_C = $(patsubst %.c,$(OBJ_DIR)/%.o,$(MODULE_SRCS))
 
 # Obc Module Sources
-MODULE_SRCS_OBJC = deps/baresip/modules/avcapture/avcapture.m
+# MODULE_SRCS_OBJC is defined above
 MODULE_OBJS_OBJC = $(patsubst %.m,$(OBJ_DIR)/%.o,$(MODULE_SRCS_OBJC))
 
 
@@ -102,10 +134,11 @@ $(OBJ_DIR):
 	@mkdir -p $(OBJ_DIR)/applets
 	@mkdir -p $(OBJ_DIR)/lvgl
 	@mkdir -p $(OBJ_DIR)/lv_drivers
+	@mkdir -p $(OBJ_DIR)/deps
 
 # Link
-$(BUILD_DIR)/$(TARGET): $(OBJ_DIR) $(ALL_OBJS)
-	@echo "Linking $(TARGET) with SDL2..."
+$(BUILD_DIR)/$(TARGET): $(OBJ_DIR) $(ALL_OBJS) deps/baresip/build/libbaresip.a deps/re/build/libre.a
+	@echo "Linking $(TARGET) with SDL2 for $(UNAME_S)..."
 	$(CC) $(ALL_OBJS) -o $@ $(LDFLAGS)
 	@echo "Build complete: $@"
 
@@ -149,6 +182,18 @@ $(OBJ_DIR)/src/modules/%.o: src/modules/%.c
 clean:
 	@echo "Cleaning build files..."
 	rm -rf $(BUILD_DIR)
+	@echo "Cleaning dependencies..."
+	cd deps/re && rm -rf build
+	cd deps/baresip && rm -rf build
+
+# Dependency Rules
+deps/re/build/libre.a:
+	@echo "Building libre..."
+	cd deps/re && cmake -B build -DLIBRE_BUILD_STATIC=ON -DLIBRE_BUILD_SHARED=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build
+
+deps/baresip/build/libbaresip.a: deps/re/build/libre.a
+	@echo "Building libbaresip..."
+	cd deps/baresip && cmake -B build -DSTATIC=ON -Dre_DIR=../re/cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build
 
 # Run
 run: $(BUILD_DIR)/$(TARGET)
@@ -165,8 +210,8 @@ help:
 	@echo "  run     - Build and run the application"
 	@echo "  help    - Show this help message"
 	@echo ""
+	@echo "Platform Detected: $(UNAME_S)"
 	@echo "LVGL and lv_drivers are included and will be compiled automatically"
 	@echo "SDL2 is used for display and input (mouse, keyboard)"
 
 .PHONY: all clean run help
-

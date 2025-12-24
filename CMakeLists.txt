@@ -8,6 +8,11 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -D_THREAD_SAFE -DSTATIC")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2)
 
+if(NOT APPLE)
+    pkg_check_modules(ALSA REQUIRED alsa)
+    pkg_check_modules(LIBV4L2 REQUIRED libv4l2)
+endif()
+
 # Include Directories
 include_directories(
     include
@@ -54,6 +59,12 @@ set(MODULE_SOURCES
 
 if(APPLE)
     list(APPEND MODULE_SOURCES deps/baresip/modules/avcapture/avcapture.m)
+    list(APPEND MODULE_SOURCES deps/baresip/modules/audiounit/audiounit.c)
+else()
+    list(APPEND MODULE_SOURCES deps/baresip/modules/alsa/alsa.c)
+    list(APPEND MODULE_SOURCES deps/baresip/modules/alsa/alsa_src.c)
+    list(APPEND MODULE_SOURCES deps/baresip/modules/alsa/alsa_play.c)
+    list(APPEND MODULE_SOURCES deps/baresip/modules/v4l2/v4l2.c)
 endif()
 
 # Executable
@@ -71,13 +82,23 @@ target_link_libraries(baresip-lvgl
     ${CMAKE_CURRENT_SOURCE_DIR}/deps/re/build/libre.a
     ssl crypto pthread z opus resolv sqlite3
     avcodec avformat avutil swscale avdevice swresample
-    "-framework CoreAudio"
-    "-framework AudioToolbox"
-    "-framework CoreFoundation"
-    "-framework SystemConfiguration"
-    "-framework AVFoundation"
-    "-framework CoreMedia"
-    "-framework CoreVideo"
-    "-framework Foundation"
-    "-framework Cocoa"
 )
+
+if(APPLE)
+    target_link_libraries(baresip-lvgl
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework CoreFoundation"
+        "-framework SystemConfiguration"
+        "-framework AVFoundation"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework Foundation"
+        "-framework Cocoa"
+    )
+else()
+    target_link_libraries(baresip-lvgl
+        ${ALSA_LIBRARIES}
+        ${LIBV4L2_LIBRARIES}
+    )
+endif()
