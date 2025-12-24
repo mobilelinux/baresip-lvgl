@@ -1,115 +1,106 @@
-# LVGL Applet Manager
+# Baresip-LVGL VoIP Client
 
-A modular applet manager system for LVGL where each applet acts as an isolated application with its own lifecycle, UI, and state management.
+A feature-rich **VoIP Softphone** built by integrating **LVGL** (Light and Versatile Graphics Library) with **Baresip** (SIP Stack). This project provides a modular, touchscreen-friendly UI for audio and video calls on macOS and Linux.
 
-## Features
+---
 
-- **Modular Architecture**: Each applet is a self-contained module with complete UI isolation
-- **Lifecycle Management**: Full lifecycle callbacks (init, start, pause, resume, stop, destroy)
-- **Navigation Stack**: Built-in back navigation support
-- **Screen Transitions**: Smooth animations between applets
-- **Example Applets**: Includes Home launcher, Settings menu, and Calculator
+## 🚀 Features
 
-## Architecture
+### Core Functionality
+-   **Audio & Video Calls**: Full SIP rendering using SDL2 textures.
+-   **Contacts Manager**: Add, edit, and call contacts locally.
+-   **Call History**: Log of incoming, outgoing, and missed calls.
+-   **DTMF Keypad**: In-call keypad for IVR navigation.
+-   **Account Management**: Configure SIP accounts directly in the UI.
 
-### Core Components
+### UI & Architecture
+-   **Modular Applets**: Application logic is split into isolated applets (Home, Call, Contacts, Settings).
+-   **Baresip Manager**: A unified C API wrapper around Baresip's core modules (UA, Call, Conf, Vidisp).
+-   **SDL2 Rendering**: Hardware-accelerated window and input handling.
+-   **Video PiP**: Picture-in-Picture support for local self-view.
 
-- **applet.h**: Defines the applet interface and lifecycle states
-- **applet_manager.h/c**: Manages applet registration, navigation, and lifecycle
+---
 
-### Example Applets
+## 🛠️ Prerequisites
 
-1. **Home Applet**: Launcher with grid layout displaying all registered applets
-2. **Settings Applet**: Demonstrates menu navigation and list widgets
-3. **Calculator Applet**: Interactive calculator showing stateful applet implementation
-
-## Building
-
-### Requirements
-
-- GCC compiler
-- LVGL library (v8.x)
-- Make
-
-### Build Instructions
-
+### macOS (Homebrew)
 ```bash
-# Build the project
-make
+brew install sdl2 ffmpeg opus mpg123 libsndfile
+```
+*Note: The project builds Baresip and re static libraries from source (included in `deps/`), but links against system codec libraries.*
 
-# Clean build files
-make clean
-
-# Build and run
-make run
+### Linux (Debian/Ubuntu)
+```bash
+sudo apt-get install build-essential git \
+    libsdl2-dev libavcodec-dev libavformat-dev libswscale-dev \
+    libavdevice-dev libopus-dev libmpg123-dev libsndfile1-dev \
+    libasound2-dev libv4l-dev
 ```
 
-## Project Structure
+---
+
+## 🏗️ Build Instructions
+
+### Compilation
+The project uses a standard `Makefile`.
+
+```bash
+# Clean previous builds
+make clean
+
+# Build the application
+make
+```
+
+### Running the Application
+The binary is generated in the `build/` directory.
+
+```bash
+./build/baresip-lvgl
+```
+
+---
+
+## ⚙️ Configuration
+
+Baresip configuration files are stored in `~/.baresip`.
+The application automatically manages `config` and `accounts`, but you can verify them manually:
+
+-   **Config**: `~/.baresip/config`
+-   **Accounts**: `~/.baresip/accounts`
+
+### Video Configuration (Auto-Patched)
+The application automatically patches `~/.baresip/config` to ensure correct video rendering:
+-   **Display Module**: `sdl_vidisp` (for Remote Video)
+-   **Selfview Module**: `window` (Mapped to `sdl_vidisp_self` for Local Video)
+-   **Video Source**: `avcapture` (macOS) or `v4l2` (Linux)
+
+---
+
+## 📂 Project Structure
 
 ```
 baresip-lvgl/
-├── include/
-│   ├── applet.h              # Applet interface
-│   └── applet_manager.h      # Applet manager API
 ├── src/
-│   ├── main.c                # Application entry point
-│   ├── applet_manager.c      # Applet manager implementation
-│   └── applets/
-│       ├── home_applet.c     # Home screen launcher
-│       ├── settings_applet.c # Settings menu
-│       └── calculator_applet.c # Calculator app
-├── lv_conf.h                 # LVGL configuration
-├── Makefile                  # Build system
-└── README.md                 # This file
+│   ├── applets/            # UI Modules (Call, Contacts, Settings)
+│   ├── manager/
+│   │   ├── baresip_manager.c  # Core SIP/Baresip integration logic
+│   │   └── applet_manager.c   # Applet lifecycle & navigation
+│   └── main.c              # Entry point & SDL/LVGL loop
+├── include/                # Header files
+├── deps/                   # Internal dependencies (baresip, re, rem)
+├── lvgl/                   # LVGL Graphics Library
+└── Makefile                # Build script
 ```
 
-## Creating New Applets
+---
 
-To create a new applet:
+## 🔧 Troubleshooting
 
-1. Create a new file in `src/applets/your_applet.c`
-2. Define the applet structure and implement lifecycle callbacks:
+### "White Blank" Local Video on Linux
+This usually indicates an overlay issue.
+-   **Fix**: The application adds a red debug border and forces transparency on the local video container. Ensure your window manager supports transparency or that the overlay (SDL texture) is essentially "under" the UI.
 
-```c
-#include "applet.h"
-#include "applet_manager.h"
-
-static int your_applet_init(applet_t *applet) {
-    // Create UI on applet->screen
-    return 0;
-}
-
-// Implement other callbacks...
-
-APPLET_DEFINE(your_applet, "YourApp", "Description", LV_SYMBOL_HOME);
-
-void your_applet_register(void) {
-    your_applet.callbacks.init = your_applet_init;
-    // Set other callbacks...
-    applet_manager_register(&your_applet);
-}
-```
-
-3. Add the registration function to `main.c`
-4. Update the Makefile to include your source file
-
-## Lifecycle Callbacks
-
-- **init**: Initialize resources and create UI (called once)
-- **start**: Called when applet becomes visible for the first time
-- **pause**: Called when applet is hidden but kept in memory
-- **resume**: Called when returning to a paused applet
-- **stop**: Called before destroying the applet
-- **destroy**: Cleanup resources and free memory
-
-## Display Integration
-
-The current implementation uses a stub display driver. For actual display output, integrate with:
-
-- **SDL**: For desktop development and testing
-- **DRM/KMS**: For embedded Linux systems
-- **Framebuffer**: For simpler embedded systems
-
-## License
-
-This is a demonstration project for LVGL applet management.
+### "NO LOCAL VIDEO STREAMS"
+-   **Cause**: The video display module failed to register correctly or the camera is blocked.
+-   **Log Check**: Look for `sdl_vidisp_alloc: dev='...' ... is_local=1` in the logs.
