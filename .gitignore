@@ -1,5 +1,7 @@
 build/
 Config/
+build_cmake/
 *.o
 *.d
 .DS_Store
+.vscode

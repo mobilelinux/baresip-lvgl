@@ -93,14 +93,3 @@ baresip-lvgl/
 └── Makefile                # Build script
 ```
 
----
-
-## 🔧 Troubleshooting
-
-### "White Blank" Local Video on Linux
-This usually indicates an overlay issue.
--   **Fix**: The application adds a red debug border and forces transparency on the local video container. Ensure your window manager supports transparency or that the overlay (SDL texture) is essentially "under" the UI.
-
-### "NO LOCAL VIDEO STREAMS"
--   **Cause**: The video display module failed to register correctly or the camera is blocked.
--   **Log Check**: Look for `sdl_vidisp_alloc: dev='...' ... is_local=1` in the logs.
