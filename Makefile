@@ -193,7 +193,10 @@ deps/re/build/libre.a:
 
 deps/baresip/build/libbaresip.a: deps/re/build/libre.a
 	@echo "Building libbaresip..."
-	cd deps/baresip && cmake -B build -DSTATIC=ON -Dre_DIR=../re/cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build
+	cd deps/baresip && cmake -B build -DSTATIC=ON -Dre_DIR=../re/cmake \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DMODULES="stun;turn;ice;opus;g711;alsa;v4l2;avcodec;avformat;swscale;fakevideo;selfview;stdio" \
+		&& cmake --build build
 
 # Run
 run: $(BUILD_DIR)/$(TARGET)

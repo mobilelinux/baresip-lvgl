@@ -3,6 +3,9 @@
 ## Quick Start
 
 ```bash
+# Initialize dependencies
+git submodule update --init --recursive
+
 # Build the project
 make
 

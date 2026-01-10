@@ -1289,7 +1289,7 @@ int baresip_manager_init(void) {
 
   // mod_add(&m, &exports_window); // DISABLE STANDARD WINDOW MODULE
 
-  sdl_set_background_draw_cb(sdl_vid_render); // Hook renderer
+  // sdl_set_background_draw_cb(sdl_vid_render); // Hook renderer
 
   // NAT Traversal
   extern const struct mod_export exports_stun;

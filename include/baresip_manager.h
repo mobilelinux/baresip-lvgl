@@ -2,9 +2,9 @@
 #define BARESIP_MANAGER_H
 
 #include "config_manager.h"
+#include <re.h>
 #include <baresip.h>
 #include <inttypes.h>
-#include <re.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>

@@ -45,6 +45,9 @@ sudo apt-get install build-essential git \
 The project uses a standard `Makefile`.
 
 ```bash
+# Determine and install dependencies
+git submodule update --init --recursive
+
 # Clean previous builds
 make clean
 
