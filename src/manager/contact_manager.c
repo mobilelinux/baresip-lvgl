@@ -2,140 +2,134 @@
 #include "database_manager.h"
 #include "logger.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <sqlite3.h>
 
 #define MAX_CONTACTS 100
-
 static contact_t g_contacts[MAX_CONTACTS];
-static int g_contact_count = 0;
+static int g_count = 0;
 
-void cm_init(void) {
-  db_init();
-  cm_load();
+int cm_load(void) {
+    g_count = db_get_contacts((db_contact_t*)g_contacts, MAX_CONTACTS);
+    return g_count;
 }
 
-int cm_get_count(void) { return g_contact_count; }
+int cm_init(void) {
+    int ret = db_init();
+    cm_load();
+    return ret;
+}
+
+int cm_get_count(void) {
+    return g_count;
+}
 
 const contact_t *cm_get_at(int index) {
-  if (index < 0 || index >= g_contact_count) {
-    return NULL;
-  }
-  return &g_contacts[index];
+    if (index < 0 || index >= g_count) return NULL;
+    return &g_contacts[index];
+}
+
+int cm_get_all(contact_t *contacts, int max_count) {
+    // db_contact_t structure matches contact_t
+    return db_get_contacts((db_contact_t*)contacts, max_count);
+}
+
+int cm_get_favorites(contact_t *contacts, int max_count) {
+    return db_get_favorite_contacts((db_contact_t*)contacts, max_count);
 }
 
 int cm_add(const char *name, const char *number, bool is_favorite) {
-  if (g_contact_count >= MAX_CONTACTS) {
-    return -1;
-  }
-  if (!name || !number) {
-    return -1;
-  }
+    sqlite3 *db = db_get_handle();
+    if (!db) return -1;
 
-  sqlite3 *db = db_get_handle();
-  if (!db)
-    return -1;
+    const char *sql = "INSERT INTO contacts (name, number, is_favorite) VALUES (?, ?, ?);";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        log_error("ContactManager", "Add prepare failed: %s", sqlite3_errmsg(db));
+        return -1;
+    }
 
-  char *sql = sqlite3_mprintf("INSERT INTO contacts (name, number, "
-                              "is_favorite) VALUES ('%q', '%q', %d);",
-                              name, number, is_favorite ? 1 : 0);
-  char *errmsg = NULL;
-  int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
-  sqlite3_free(sql);
+    sqlite3_bind_text(stmt, 1, name ? name : "", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, number ? number : "", -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, is_favorite ? 1 : 0);
 
-  if (rc != SQLITE_OK) {
-    log_error("ContactManager", "Failed to add contact: %s", errmsg);
-    sqlite3_free(errmsg);
-    return -1;
-  }
-
-  // Update internal cache
-  cm_load();
-  return 0;
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        log_error("ContactManager", "Add step failed: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+    
+    sqlite3_finalize(stmt);
+    cm_load();
+    return 0;
 }
 
 int cm_update(int id, const char *name, const char *number, bool is_favorite) {
-  sqlite3 *db = db_get_handle();
-  if (!db)
-    return -1;
+    sqlite3 *db = db_get_handle();
+    if (!db) return -1;
 
-  char *sql = sqlite3_mprintf(
-      "UPDATE contacts SET name='%q', number='%q', is_favorite=%d WHERE id=%d;",
-      name, number, is_favorite ? 1 : 0, id);
-  char *errmsg = NULL;
-  int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
-  sqlite3_free(sql);
+    const char *sql = "UPDATE contacts SET name=?, number=?, is_favorite=? WHERE id=?;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        log_error("ContactManager", "Update prepare failed: %s", sqlite3_errmsg(db));
+        return -1;
+    }
 
-  if (rc != SQLITE_OK) {
-    log_error("ContactManager", "Failed to update contact: %s", errmsg);
-    sqlite3_free(errmsg);
-    return -1;
-  }
+    sqlite3_bind_text(stmt, 1, name ? name : "", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, number ? number : "", -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 3, is_favorite ? 1 : 0);
+    sqlite3_bind_int(stmt, 4, id);
 
-  // Update internal cache
-  cm_load();
-  return 0;
-}
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        log_error("ContactManager", "Update step failed: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return -1;
+    }
 
-int cm_remove(int id) {
-  sqlite3 *db = db_get_handle();
-  if (!db)
-    return -1;
-
-  char *sql = sqlite3_mprintf("DELETE FROM contacts WHERE id=%d;", id);
-  char *errmsg = NULL;
-  int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);
-  sqlite3_free(sql);
-
-  if (rc != SQLITE_OK) {
-    log_error("ContactManager", "Failed to remove contact: %s", errmsg);
-    sqlite3_free(errmsg);
-    return -1;
-  }
-
-  cm_load();
-  return 0;
-}
-
-int cm_load(void) {
-  sqlite3 *db = db_get_handle();
-  if (!db)
+    sqlite3_finalize(stmt);
+    cm_load();
     return 0;
-
-  g_contact_count = 0;
-
-  const char *sql =
-      "SELECT id, name, number, is_favorite FROM contacts ORDER BY name;";
-  sqlite3_stmt *stmt;
-
-  int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
-  if (rc != SQLITE_OK) {
-    log_error("ContactManager", "Failed to prepare select: %s",
-              sqlite3_errmsg(db));
-    return 0;
-  }
-
-  while (sqlite3_step(stmt) == SQLITE_ROW && g_contact_count < MAX_CONTACTS) {
-    int id = sqlite3_column_int(stmt, 0);
-    const char *name = (const char *)sqlite3_column_text(stmt, 1);
-    const char *number = (const char *)sqlite3_column_text(stmt, 2);
-    int is_favorite = sqlite3_column_int(stmt, 3);
-
-    g_contacts[g_contact_count].id = id;
-    g_contacts[g_contact_count].is_favorite = (is_favorite != 0);
-    strncpy(g_contacts[g_contact_count].name, name ? name : "",
-            sizeof(g_contacts[0].name) - 1);
-    strncpy(g_contacts[g_contact_count].number, number ? number : "",
-            sizeof(g_contacts[0].number) - 1);
-    g_contact_count++;
-  }
-
-  sqlite3_finalize(stmt);
-  log_info("ContactManager", "Loaded %d contacts", g_contact_count);
-  return g_contact_count;
 }
 
-int cm_save(void) {
-  // No-op, saving happens on add/remove
-  return 0;
+int cm_delete(int id) {
+    sqlite3 *db = db_get_handle();
+    if (!db) return -1;
+
+    const char *sql = "DELETE FROM contacts WHERE id=?;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        log_error("ContactManager", "Delete prepare failed: %s", sqlite3_errmsg(db));
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, id);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        log_error("ContactManager", "Delete step failed: %s", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+
+    sqlite3_finalize(stmt);
+    cm_load();
+    return 0;
+}
+
+int cm_set_favorite(int id, bool favorite) {
+    sqlite3 *db = db_get_handle();
+    if (!db) return -1;
+
+    const char *sql = "UPDATE contacts SET is_favorite=? WHERE id=?;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+
+    sqlite3_bind_int(stmt, 1, favorite ? 1 : 0);
+    sqlite3_bind_int(stmt, 2, id);
+
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    cm_load();
+    return 0;
 }

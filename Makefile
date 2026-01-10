@@ -66,19 +66,20 @@ LDFLAGS = -lm $(shell sdl2-config --libs) \
 
 # Source files
 SRCS = $(SRC_DIR)/main.c \
-       $(SRC_DIR)/logger/logger.c \
        $(SRC_DIR)/manager/applet_manager.c \
        $(SRC_DIR)/manager/config_manager.c \
        $(SRC_DIR)/manager/baresip_manager.c \
        $(SRC_DIR)/manager/contact_manager.c \
        $(SRC_DIR)/manager/history_manager.c \
        $(SRC_DIR)/manager/database_manager.c \
+       $(SRC_DIR)/ui/ui_helpers.c \
        $(APPLET_DIR)/home_applet.c \
        $(APPLET_DIR)/settings_applet.c \
        $(APPLET_DIR)/calculator_applet.c \
        $(APPLET_DIR)/call_applet.c \
        $(APPLET_DIR)/contacts_applet.c \
        $(APPLET_DIR)/call_log_applet.c \
+       $(APPLET_DIR)/chat_applet.c \
        $(APPLET_DIR)/about_applet.c
 
 # LVGL source files
@@ -189,12 +190,12 @@ clean:
 # Dependency Rules
 deps/re/build/libre.a:
 	@echo "Building libre..."
-	cd deps/re && cmake -B build -DLIBRE_BUILD_STATIC=ON -DLIBRE_BUILD_SHARED=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build
+	cd deps/re && cmake -B build -DLIBRE_BUILD_STATIC=ON -DLIBRE_BUILD_SHARED=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_C_FLAGS="$(COMMON_CFLAGS)" && cmake --build build
 
 deps/baresip/build/libbaresip.a: deps/re/build/libre.a
 	@echo "Building libbaresip..."
 	cd deps/baresip && cmake -B build -DSTATIC=ON -Dre_DIR=../re/cmake \
-		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_C_FLAGS="$(COMMON_CFLAGS)" \
 		-DMODULES="stun;turn;ice;opus;g711;alsa;v4l2;avcodec;avformat;swscale;fakevideo;selfview;stdio" \
 		&& cmake --build build
 

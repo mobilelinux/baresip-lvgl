@@ -1,75 +1,56 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
-#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <re.h>
+#include <baresip.h>
 
-/**
- * Log levels
- */
-typedef enum {
-  LOG_LEVEL_TRACE = 0,
-  LOG_LEVEL_DEBUG,
-  LOG_LEVEL_INFO,
-  LOG_LEVEL_WARN,
-  LOG_LEVEL_ERROR,
-  LOG_LEVEL_FATAL,
-  LOG_LEVEL_COUNT
-} log_level_t;
+// Use baresip's log level enum
+typedef enum log_level log_level_t;
 
-/**
- * Initialize the logger
- *
- * @param initial_level The initial logging level
- */
-void logger_init(log_level_t initial_level);
+// Map LOG_LEVEL_* to LEVEL_*
+#define LOG_LEVEL_TRACE LEVEL_DEBUG // Baresip might not have TRACE
+#define LOG_LEVEL_DEBUG LEVEL_DEBUG
+#define LOG_LEVEL_INFO  LEVEL_INFO
+#define LOG_LEVEL_WARN  LEVEL_WARN
+#define LOG_LEVEL_ERROR LEVEL_ERROR
+#define LOG_LEVEL_FATAL LEVEL_ERROR // Map FATAL to ERROR
 
-/**
- * Set the current logging level
- *
- * @param level The new logging level. Messages below this level will be
- * ignored.
- */
-void logger_set_level(log_level_t level);
+// Simple logger stubs
+static inline void logger_set_level(log_level_t level) {
+    (void)level; // No-op for now
+}
 
-/**
- * Get the current logging level
- *
- * @return log_level_t The current logging level
- */
-log_level_t logger_get_level(void);
+static inline void logger_init(log_level_t level) {
+    (void)level;
+}
 
-/**
- * Log a message
- *
- * @param level Message level
- * @param module Module name (optional, can be NULL)
- * @param fmt Format string
- * @param ... Arguments
- */
-void logger_log(log_level_t level, const char *module, const char *fmt, ...);
+static inline log_level_t logger_parse_level(const char *str) {
+    if (!str) return LEVEL_INFO;
+    if (strcasecmp(str, "TRACE") == 0) return LEVEL_DEBUG;
+    if (strcasecmp(str, "DEBUG") == 0) return LEVEL_DEBUG;
+    if (strcasecmp(str, "INFO") == 0) return LEVEL_INFO;
+    if (strcasecmp(str, "WARN") == 0) return LEVEL_WARN;
+    if (strcasecmp(str, "ERROR") == 0) return LEVEL_ERROR;
+    if (strcasecmp(str, "FATAL") == 0) return LEVEL_ERROR;
+    return LEVEL_INFO;
+}
 
-// Convenience macros
-// Convenience macros
-#if defined(NDEBUG) // Release Build
-#define log_trace(module, ...) ((void)0)
-#define log_debug(module, ...) ((void)0)
-#define log_info(module, ...) ((void)0)
-#define log_warn(module, ...) ((void)0)
-#define log_error(module, ...) logger_log(LOG_LEVEL_ERROR, module, __VA_ARGS__)
-#define log_fatal(module, ...) logger_log(LOG_LEVEL_FATAL, module, __VA_ARGS__)
-#else // Debug Build
-#define log_trace(module, ...) logger_log(LOG_LEVEL_TRACE, module, __VA_ARGS__)
-#define log_debug(module, ...) logger_log(LOG_LEVEL_DEBUG, module, __VA_ARGS__)
-#define log_info(module, ...) logger_log(LOG_LEVEL_INFO, module, __VA_ARGS__)
-#define log_warn(module, ...) logger_log(LOG_LEVEL_WARN, module, __VA_ARGS__)
-#define log_error(module, ...) logger_log(LOG_LEVEL_ERROR, module, __VA_ARGS__)
-#define log_fatal(module, ...) logger_log(LOG_LEVEL_FATAL, module, __VA_ARGS__)
-#endif
+static inline const char *logger_level_str(log_level_t level) {
+    switch (level) {
+        case LEVEL_DEBUG: return "DEBUG";
+        case LEVEL_INFO:  return "INFO";
+        case LEVEL_WARN:  return "WARN";
+        case LEVEL_ERROR: return "ERROR";
+        default:          return "INFO";
+    }
+}
 
-// Helper to convert string to level (for config loading)
-log_level_t logger_parse_level(const char *level_str);
-
-// Helper to convert level to string
-const char *logger_level_str(log_level_t level);
+// Simple stdout logger
+#define log_info(tag, fmt, ...)  printf("[INFO]  [%-15s] " fmt "\n", tag, ##__VA_ARGS__)
+#define log_warn(tag, fmt, ...)  printf("[WARN]  [%-15s] " fmt "\n", tag, ##__VA_ARGS__)
+#define log_error(tag, fmt, ...) printf("[ERROR] [%-15s] " fmt "\n", tag, ##__VA_ARGS__)
+#define log_debug(tag, fmt, ...) printf("[DEBUG] [%-15s] " fmt "\n", tag, ##__VA_ARGS__)
 
 #endif // LOGGER_H

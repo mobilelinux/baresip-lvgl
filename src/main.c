@@ -18,6 +18,7 @@ extern void calculator_applet_register(void);
 extern void call_applet_register(void);
 extern void contacts_applet_register(void);
 extern void call_log_applet_register(void);
+extern void chat_applet_register(void);
 extern void about_applet_register(void);
 
 // Get current time in milliseconds
@@ -61,8 +62,16 @@ static int init_display(void) {
 
   // Create display buffer
   static lv_disp_draw_buf_t disp_buf;
-  static lv_color_t buf1[SDL_HOR_RES * 100];
-  static lv_color_t buf2[SDL_HOR_RES * 100];
+  const size_t buf_size = SDL_HOR_RES * 100 * sizeof(lv_color_t);
+  
+  lv_color_t *buf1 = malloc(buf_size);
+  lv_color_t *buf2 = malloc(buf_size);
+  
+  if (!buf1 || !buf2) {
+      log_error("Main", "Failed to allocate display buffers");
+      return -1;
+  }
+  
   lv_disp_draw_buf_init(&disp_buf, buf1, buf2, SDL_HOR_RES * 100);
 
   // Initialize and register display driver
@@ -154,6 +163,7 @@ int main(void) {
   call_applet_register();
   contacts_applet_register();
   call_log_applet_register();
+  chat_applet_register();
   about_applet_register();
 
   // Force initialization of Call applet to start background SIP services

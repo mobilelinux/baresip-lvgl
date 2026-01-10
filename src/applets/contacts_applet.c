@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../ui/ui_helpers.h"
 
 // UI State
 static bool is_editor_mode = false;
@@ -122,6 +123,7 @@ static lv_obj_t *create_avatar(lv_obj_t *parent, const char *name, int size) {
 // ------------------- EVENT HANDLERS -------------------
 
 static void back_btn_clicked(lv_event_t *e) {
+  (void)e;
   if (is_editor_mode) {
     if (g_return_to_caller) {
       g_return_to_caller = false;
@@ -136,6 +138,7 @@ static void back_btn_clicked(lv_event_t *e) {
 }
 
 static void add_btn_clicked(lv_event_t *e) {
+  (void)e;
   is_editor_mode = true;
   is_new_contact = true;
   memset(&current_edit_contact, 0, sizeof(contact_t));
@@ -182,6 +185,7 @@ static void save_btn_clicked(lv_event_t *e) {
 }
 
 static void delete_btn_clicked(lv_event_t *e) {
+  (void)e;
   if (!is_new_contact) {
     cm_remove(current_edit_contact.id);
   }
@@ -201,7 +205,7 @@ static void close_picker_modal(void) {
   }
 }
 
-static void account_picker_cancel(lv_event_t *e) { close_picker_modal(); }
+static void account_picker_cancel(lv_event_t *e) { (void)e; close_picker_modal(); }
 
 static void account_picker_item_clicked(lv_event_t *e) {
   const char *aor = (const char *)lv_event_get_user_data(e);
@@ -398,27 +402,7 @@ static void draw_list(void) {
   lv_obj_set_style_pad_all(g_applet->screen, 0, 0);
   lv_obj_set_style_pad_gap(g_applet->screen, 0, 0);
 
-  lv_obj_t *header = lv_obj_create(g_applet->screen);
-  lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_set_style_bg_color(header, lv_palette_main(LV_PALETTE_LIGHT_BLUE), 0);
-  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t *back_btn = lv_btn_create(header);
-  lv_obj_set_size(back_btn, 40, 40);
-  lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
-  lv_obj_set_style_bg_opa(back_btn, 0, 0);
-  lv_obj_set_style_shadow_width(back_btn, 0, 0);
-
-  lv_obj_t *back_icon = lv_label_create(back_btn);
-  lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-  lv_obj_center(back_icon);
-  lv_obj_add_event_cb(back_btn, back_btn_clicked, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "Contacts");
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-  lv_obj_align(title, LV_ALIGN_LEFT_MID, 50, 0);
+  ui_create_title_bar(g_applet->screen, "Contacts", true, back_btn_clicked, NULL);
 
   lv_obj_t *list = lv_obj_create(g_applet->screen);
   lv_obj_set_width(list, LV_PCT(100));
@@ -521,36 +505,11 @@ static void draw_editor(void) {
   lv_obj_set_style_pad_all(g_applet->screen, 0, 0);
   lv_obj_set_style_pad_gap(g_applet->screen, 0, 0);
 
-  lv_obj_t *header = lv_obj_create(g_applet->screen);
-  lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_set_style_bg_color(header, lv_palette_main(LV_PALETTE_LIGHT_BLUE), 0);
-  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t *back_btn = lv_btn_create(header);
-  lv_obj_set_size(back_btn, 40, 40);
-  lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 0, 0);
-  lv_obj_set_style_bg_opa(back_btn, 0, 0);
-  lv_obj_set_style_shadow_width(back_btn, 0, 0);
-  lv_obj_t *back_icon = lv_label_create(back_btn);
-  lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-  lv_obj_center(back_icon);
-  lv_obj_add_event_cb(back_btn, back_btn_clicked, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title,
-                    is_new_contact ? "New Contact" : current_edit_contact.name);
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-  lv_obj_align(title, LV_ALIGN_LEFT_MID, 50, 0);
-
-  lv_obj_t *save_btn = lv_btn_create(header);
-  lv_obj_set_size(save_btn, 40, 40);
-  lv_obj_align(save_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-  lv_obj_set_style_bg_opa(save_btn, 0, 0);
-  lv_obj_set_style_shadow_width(save_btn, 0, 0);
-  lv_obj_t *save_icon = lv_label_create(save_btn);
-  lv_label_set_text(save_icon, LV_SYMBOL_OK);
-  lv_obj_center(save_icon);
+  lv_obj_t *save_btn = ui_header_add_action_btn(
+      ui_create_title_bar(g_applet->screen,
+                          is_new_contact ? "New Contact" : current_edit_contact.name,
+                          true, back_btn_clicked, NULL),
+      LV_SYMBOL_OK, NULL, NULL);
 
   lv_obj_t *content = lv_obj_create(g_applet->screen);
   lv_obj_set_width(content, LV_PCT(100));
@@ -677,15 +636,19 @@ static void close_context_menu(void) {
   }
 }
 
-static void context_menu_cancel(lv_event_t *e) { close_context_menu(); }
+static void context_menu_cancel(lv_event_t *e) { (void)e; close_context_menu(); }
 
 static void context_menu_delete(lv_event_t *e) {
+  (void)e;
+  (void)e;
   cm_remove(g_context_menu_contact.id);
   close_context_menu();
   refresh_ui();
 }
 
 static void context_menu_toggle_fav(lv_event_t *e) {
+  (void)e;
+  (void)e;
   bool new_fav = !g_context_menu_contact.is_favorite;
   cm_update(g_context_menu_contact.id, g_context_menu_contact.name,
             g_context_menu_contact.number, new_fav);

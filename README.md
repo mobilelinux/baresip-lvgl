@@ -1,98 +1,69 @@
-# Baresip-LVGL VoIP Client
+# baresip-lvgl
 
-A feature-rich **VoIP Softphone** built by integrating **LVGL** (Light and Versatile Graphics Library) with **Baresip** (SIP Stack). This project provides a modular, touchscreen-friendly UI for audio and video calls on macOS and Linux.
+An advanced embedded SIP Softphone application for Linux/ARM platforms, combining the robust [Baresip](https://github.com/baresip/baresip) SIP stack with a modern [LVGL](https://lvgl.io) touch user interface.
 
----
+![Status](https://img.shields.io/badge/status-active-success)
+![License](https://img.shields.io/badge/license-BSD-blue)
 
-## 🚀 Features
+## Features
 
-### Core Functionality
--   **Audio & Video Calls**: Full SIP rendering using SDL2 textures.
--   **Contacts Manager**: Add, edit, and call contacts locally.
--   **Call History**: Log of incoming, outgoing, and missed calls.
--   **DTMF Keypad**: In-call keypad for IVR navigation.
--   **Account Management**: Configure SIP accounts directly in the UI.
+### Core Telephony
+- **Voice & Video Calls**: Full support for SIP voice and video calls using `g711`, `opus`, `h264` (via ffmpeg/avcodec), and more.
+- **Conferencing**: Basic support for audio handling.
+- **DTMF**: In-call keypad for DTMF signaling.
 
-### UI & Architecture
--   **Modular Applets**: Application logic is split into isolated applets (Home, Call, Contacts, Settings).
--   **Baresip Manager**: A unified C API wrapper around Baresip's core modules (UA, Call, Conf, Vidisp).
--   **SDL2 Rendering**: Hardware-accelerated window and input handling.
--   **Video PiP**: Picture-in-Picture support for local self-view.
+### User Interface (LVGL 8.3)
+- **Applet Architecture**: Modular UI composed of isolated "Applets" managed by an `AppletManager`.
+- **Dialer Applet**: Keypad, recent call status, and easy account switching.
+- **Contacts Applet**: Add, edit, and delete contacts (stored in SQLite).
+- **Messages (Chat) Applet**: Full SIP MESSAGE support with conversation history.
+- **Call History**: Detailed log of Incoming, Outgoing, and Missed calls.
+- **Settings**: On-device configuration for SIP Accounts, Audio/Video settings, and Network params.
 
----
+### Architecture
+- **Baresip Manager**: A high-level C wrapper around `libre` and `libbaresip` that handles the event loop, thread safety, and state management.
+- **Database Manager**: SQLite3 backend for persistent storage of Contacts, History, and Messages.
+- **SDL2 Driver**: Robust display and input driver for development/desktop environments (800x600 resolution).
 
-## 🛠️ Prerequisites
+## Build Instructions
 
-### macOS (Homebrew)
-```bash
-brew install sdl2 ffmpeg opus mpg123 libsndfile
-```
-*Note: The project builds Baresip and re static libraries from source (included in `deps/`), but links against system codec libraries.*
+### Prerequisites
+- **Libraries**: `SDL2`, `sqlite3`, `openssl`, `opus`, `ffmpeg` (optional for video).
+- **Tools**: `gcc`, `make`, `cmake`.
 
-### Linux (Debian/Ubuntu)
-```bash
-sudo apt-get install build-essential git \
-    libsdl2-dev libavcodec-dev libavformat-dev libswscale-dev \
-    libavdevice-dev libopus-dev libmpg123-dev libsndfile1-dev \
-    libasound2-dev libv4l-dev
-```
+### Compiling
+0. Initialize submodules:
+   ```bash
+   git submodule update --init --recursive
+   ```
 
----
+1. Build the project:
+   ```bash
+   make
+   ```
+   *Note: First build compiles LVGL and Baresip dependencies and may take a minute.*
 
-## 🏗️ Build Instructions
+2. Run:
+   ```bash
+   ./build/baresip-lvgl
+   ```
 
-### Compilation
-The project uses a standard `Makefile`.
+### Debugging
+The application outputs logs to `stdout`.
+- **Log Level**: Configurable in `Settings > App Settings` or via `config.json`.
+- **Visuals**: Ensure your SDL2 environment supports 32-bit color (`ARGB8888`) to match `LV_COLOR_DEPTH=32`.
 
-```bash
-# Determine and install dependencies
-git submodule update --init --recursive
+## Configuration
+Application state is persisted in `~/.baresip/`:
+- `accounts`: SIP Account configurations.
+- `config`: Core baresip settings.
+- `settings.json`: App-specific settings (Log level, default account).
+- `baresip_lvgl.db`: SQLite database for user data.
 
-# Clean previous builds
-make clean
+## Recent Updates
+- **Stability**: Fixed memory corruption issues in Baresip integration.
+- **Visuals**: Upgraded to 32-bit color depth and 800x600 SVGA resolution for crisp rendering without artifacts.
+- **Chat**: Newly integrated messaging applet with real-time updates.
 
-# Build the application
-make
-```
-
-### Running the Application
-The binary is generated in the `build/` directory.
-
-```bash
-./build/baresip-lvgl
-```
-
----
-
-## ⚙️ Configuration
-
-Baresip configuration files are stored in `~/.baresip`.
-The application automatically manages `config` and `accounts`, but you can verify them manually:
-
--   **Config**: `~/.baresip/config`
--   **Accounts**: `~/.baresip/accounts`
-
-### Video Configuration (Auto-Patched)
-The application automatically patches `~/.baresip/config` to ensure correct video rendering:
--   **Display Module**: `sdl_vidisp` (for Remote Video)
--   **Selfview Module**: `window` (Mapped to `sdl_vidisp_self` for Local Video)
--   **Video Source**: `avcapture` (macOS) or `v4l2` (Linux)
-
----
-
-## 📂 Project Structure
-
-```
-baresip-lvgl/
-├── src/
-│   ├── applets/            # UI Modules (Call, Contacts, Settings)
-│   ├── manager/
-│   │   ├── baresip_manager.c  # Core SIP/Baresip integration logic
-│   │   └── applet_manager.c   # Applet lifecycle & navigation
-│   └── main.c              # Entry point & SDL/LVGL loop
-├── include/                # Header files
-├── deps/                   # Internal dependencies (baresip, re, rem)
-├── lvgl/                   # LVGL Graphics Library
-└── Makefile                # Build script
-```
-
+## License
+BSD-3-Clause (See LICENSE file).

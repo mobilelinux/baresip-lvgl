@@ -30,6 +30,18 @@ int applet_manager_register(applet_t *applet) {
   return 0;
 }
 
+// Global gesture handler
+static void global_gesture_handler(lv_event_t *e) {
+  (void)e;
+  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+  // User requested "slide left-right" support.
+  // We treat BOTH directions as "Back" for now to match user expectation of "swip left" response.
+  if (dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) {
+    log_info("AppletManager", "Detected Swipe (Dir: %d) - Going Back", dir);
+    applet_manager_back();
+  }
+}
+
 static int applet_init_if_needed(applet_t *applet) {
   if (!applet)
     return -1;
@@ -43,6 +55,10 @@ static int applet_init_if_needed(applet_t *applet) {
                 applet->name);
       return -1;
     }
+
+    // Register global gesture handler
+    lv_obj_add_flag(applet->screen, LV_OBJ_FLAG_CLICKABLE); // Ensure screen captures input
+    lv_obj_add_event_cb(applet->screen, global_gesture_handler, LV_EVENT_GESTURE, NULL);
 
     // Call init callback if provided
     if (applet->callbacks.init) {
@@ -104,6 +120,17 @@ int applet_manager_launch_applet(applet_t *applet) {
 
   log_info("AppletManager", "Launched applet: %s", applet->name);
   return 0;
+}
+
+applet_t *applet_manager_get_applet(const char *name) {
+  if (!name) return NULL;
+
+  for (int i = 0; i < g_manager.applet_count; i++) {
+    if (strcmp(g_manager.applets[i]->name, name) == 0) {
+      return g_manager.applets[i];
+    }
+  }
+  return NULL;
 }
 
 int applet_manager_launch(const char *name) {

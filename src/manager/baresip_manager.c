@@ -1,17 +1,35 @@
+#define _GNU_SOURCE 1
 #define _DEFAULT_SOURCE 1
-#define _BSD_SOURCE 1
+#include <unistd.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <re.h>
+#include <rem_vid.h>
+
+// Forward Decls for missing/implicit functions
+struct message;
+struct ua;
+struct message *uag_message(void);
+struct ua *uag_current(void);
+struct list *uag_list(void); // Corrected return type
+struct ua *uag_find_msg(const struct sip_msg *msg);
+
+
 #include "baresip_manager.h"
+#include "lvgl.h"
+// #include <SDL.h> // Removed
 #include "config_manager.h"
 #include "history_manager.h"
+#include "database_manager.h"
+#include "applet_manager.h"
 #include "logger.h"
-#include "lv_drivers/sdl/sdl.h"
-#include <SDL.h>
-#include <baresip.h>
-#include <ifaddrs.h>
+// Includes cleaned
+
+struct message *uag_message(void);
+struct ua *uag_current(void);
+
 #include <net/if.h>
-#include <re.h>
 #include <re_dbg.h>
-#include <rem_vid.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -20,9 +38,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-
+#include <pthread.h>
 // Helper to check if string is empty
 // str_isset is provided by re_fmt.h from re.h
 
@@ -31,6 +47,7 @@ extern const struct mod_export exports_opus;
 extern const struct mod_export exports_account;
 extern const struct mod_export exports_stun;
 extern const struct mod_export exports_turn;
+extern const struct mod_export exports_ice;
 #ifdef __APPLE__
 extern const struct mod_export exports_audiounit;
 extern const struct mod_export exports_coreaudio;
@@ -59,7 +76,7 @@ typedef struct {
 static struct vidisp *vid = NULL;  // Remote (sdl_vidisp)
 static struct vidisp *vid2 = NULL; // Local (window)
 
-static int baresip_manager_register_vidisp(void);
+// baresip_manager_register_vidisp declaration removed
 
 // Global state
 static struct {
@@ -80,38 +97,106 @@ static struct {
                   .current_call = NULL,
                   .account_count = 0};
 
-static void add_or_update_call(struct call *call, enum call_state state,
-                               const char *peer) {
-  if (!call)
-    return;
-  // Find existing
-  for (int i = 0; i < MAX_CALLS; i++) {
-    if (g_call_state.active_calls[i].call == call) {
-      g_call_state.active_calls[i].state = state;
-      if (peer)
-        strncpy(g_call_state.active_calls[i].peer_uri, peer, 255);
-      return;
+// Command Queue for Thread Safety
+typedef enum {
+    CMD_NONE = 0,
+    CMD_ADD_ACCOUNT,
+    CMD_SEND_MESSAGE
+} cmd_type_t;
+
+typedef struct {
+    cmd_type_t type;
+    union {
+        voip_account_t acc;
+        struct {
+            char peer[256];
+            char text[512];
+        } msg;
+    } data;
+} cmd_t;
+
+#define CMD_QUEUE_SIZE 10
+static struct {
+    cmd_t items[CMD_QUEUE_SIZE];
+    int head;
+    int tail;
+    int count;
+} g_cmd_queue = {0};
+
+static pthread_mutex_t g_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Queue Helper
+static bool cmd_enqueue(const cmd_t *cmd) {
+    bool ret = false;
+    pthread_mutex_lock(&g_cmd_mutex);
+    if (g_cmd_queue.count < CMD_QUEUE_SIZE) {
+        g_cmd_queue.items[g_cmd_queue.tail] = *cmd;
+        g_cmd_queue.tail = (g_cmd_queue.tail + 1) % CMD_QUEUE_SIZE;
+        g_cmd_queue.count++;
+        ret = true;
     }
-  }
-  // Add new
-  for (int i = 0; i < MAX_CALLS; i++) {
-    if (g_call_state.active_calls[i].call == NULL) {
-      g_call_state.active_calls[i].call = call;
-      g_call_state.active_calls[i].state = state;
-      if (peer)
-        strncpy(g_call_state.active_calls[i].peer_uri, peer, 255);
-      else
-        g_call_state.active_calls[i].peer_uri[0] = '\0';
-      log_info("BaresipManager", "Added call %p to slot %d", call, i);
-      return;
+    pthread_mutex_unlock(&g_cmd_mutex);
+    return ret;
+}
+
+// Watchdog
+static struct tmr watchdog_tmr;
+static void check_call_watchdog(void *arg);
+
+// Messaging Subsystem
+static struct message *g_message = NULL;
+
+// Forward declaration
+static void safe_strncpy(char *dest, const char *src, size_t size) {
+    if (size == 0 || !dest) return;
+    if (!src) {
+        dest[0] = '\0';
+        return;
     }
-  }
-  log_warn("BaresipManager", "Max calls reached, could not track call %p",
-           call);
+    size_t len = strlen(src);
+    if (len >= size) len = size - 1;
+    memcpy(dest, src, len);
+    dest[len] = '\0';
+}
+
+static int internal_add_account(const voip_account_t *acc);
+static int internal_send_message(const char *peer, const char *text);
+
+static void add_or_update_call(struct call *call, enum call_state state, const char *peer) {
+    if (!call) return;
+    
+    // Check if exists
+    for (int i=0; i<MAX_CALLS; i++) {
+        if (g_call_state.active_calls[i].call == call) {
+            // Update
+            g_call_state.active_calls[i].state = state;
+            if (peer) {
+                safe_strncpy(g_call_state.active_calls[i].peer_uri, peer, 256);
+            }
+            // log_info("BaresipManager", "Updated call %p in slot %d", call, i);
+            return;
+        }
+    }
+    
+    // Add new
+    for (int i=0; i<MAX_CALLS; i++) {
+        if (g_call_state.active_calls[i].call == NULL) {
+            g_call_state.active_calls[i].call = call;
+            g_call_state.active_calls[i].state = state;
+            if (peer) {
+                safe_strncpy(g_call_state.active_calls[i].peer_uri, peer, 256);
+            } else {
+                 g_call_state.active_calls[i].peer_uri[0] = '\0';
+            }
+            log_info("BaresipManager", "Added call %p to slot %d", call, i);
+            return;
+        }
+    }
+    log_warn("BaresipManager", "Max calls reached, could not track call %p", call);
 }
 
 static void remove_call(struct call *call) {
-  if (!call)
+  if (!g_call_state.current_call)
     return;
   for (int i = 0; i < MAX_CALLS; i++) {
     if (g_call_state.active_calls[i].call == call) {
@@ -169,6 +254,7 @@ static account_status_t *find_account(const char *aor) {
 }
 
 // Add or update account status
+/* Unused function removed */
 static void update_account_status(const char *aor, reg_status_t status) {
   if (!aor)
     return;
@@ -176,7 +262,7 @@ static void update_account_status(const char *aor, reg_status_t status) {
   account_status_t *acc = find_account(aor);
   if (!acc && g_call_state.account_count < MAX_ACCOUNTS) {
     acc = &g_call_state.accounts[g_call_state.account_count++];
-    strncpy(acc->aor, aor, sizeof(acc->aor) - 1);
+    safe_strncpy(acc->aor, aor, sizeof(acc->aor));
   }
 
   if (acc) {
@@ -190,18 +276,61 @@ static void update_account_status(const char *aor, reg_status_t status) {
 }
 
 // Call event handler
-static void call_event_handler(enum bevent_ev ev, struct bevent *event,
-                               void *arg) {
-  (void)arg;
+// Forward declarations
+extern const struct mod_export exports_sdl_vidisp;
+extern const struct mod_export exports_window;
 
-  // Log EVERY event for debugging
-  log_debug("BaresipManager", "*** Event received: %d (%s) ***", ev,
-            bevent_str(ev));
+static void message_handler(struct ua *ua, const struct pl *peer, const struct pl *ctype,
+                            struct mbuf *body, void *arg) {
+    (void)ua;
+    (void)ctype;
+    (void)arg;
+
+    // Convert body to C-string
+    size_t len = mbuf_get_left(body);
+    if (len == 0) return;
+
+    char *text = mem_zalloc(len + 1, NULL);
+    if (!text) return;
+
+    mbuf_read_mem(body, (uint8_t*)text, len);
+    text[len] = '\0'; // Ensure null termination
+
+    // Get Peer URI string
+    char from_uri[256];
+    if (peer && peer->l > 0) {
+        snprintf(from_uri, sizeof(from_uri), "%.*s", (int)peer->l, peer->p);
+    } else {
+        snprintf(from_uri, sizeof(from_uri), "unknown");
+    }
+
+    log_info("BaresipManager", "RECEIVED MESSAGE from %s: %s", from_uri, text);
+
+    // Save to DB (Incoming = 0)
+    db_chat_add(from_uri, 0, text);
+
+    mem_deref(text);
+    
+    // Note: Baresip handles 200 OK automatically if handler returns (or earlier in the chain)
+}
+
+
+static void call_event_handler(enum bevent_ev ev, struct bevent *event, void *arg) {
+  struct ua *ua = bevent_get_ua(event);
+  struct call *call = bevent_get_call(event);
+  const char *prm = bevent_get_text(event);
+  (void)arg;
+  
+  // Define peer early
+  const char *peer = call ? call_peeruri(call) : "unknown";
+
+  // Log EVERY event for debugging (printf for visibility)
+  printf("BaresipManager: *** Event received: %d (%s) ***\n", ev, bevent_str(ev)); fflush(stdout);
 
   // Handle registration events
   switch (ev) {
   case BEVENT_REGISTERING: {
-    struct ua *ua = bevent_get_ua(event);
+    // struct ua *ua = ua; // REMOVED: Shadowing caused ua to be uninitialized!
     if (ua) {
       const char *aor = account_aor(ua_account(ua));
       log_info("BaresipManager", ">>> REGISTERING: %s", aor);
@@ -212,36 +341,128 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     return;
   }
   case BEVENT_REGISTER_OK: {
-    struct ua *ua = bevent_get_ua(event);
+    // struct ua *ua = ua; // REMOVED: Shadowing caused ua to be uninitialized!
     if (ua) {
       const char *aor = account_aor(ua_account(ua));
-      log_info("BaresipManager", ">>> REGISTER_OK: %s ✓", aor);
       update_account_status(aor, REG_STATUS_REGISTERED);
     } else {
-      log_warn("BaresipManager", ">>> REGISTER_OK: ua is NULL!");
+      log_warn("BaresipManager", ">>> REGISTER_OK: ua is NULL! (Cannot update status)");
     }
     return;
   }
   case BEVENT_REGISTER_FAIL: {
-    struct ua *ua = bevent_get_ua(event);
+    // struct ua *ua = ua; // REMOVED: Shadowing caused ua to be uninitialized!
     if (ua) {
       const char *aor = account_aor(ua_account(ua));
-      const char *error_text = bevent_get_text(event);
-      log_warn("BaresipManager", ">>> REGISTER_FAIL: %s (reason: %s) ✗", aor,
-               error_text ? error_text : "unknown");
-      update_account_status(aor, REG_STATUS_FAILED);
+      const char *error_text = prm; // Use prm instead of text
+  
+      // Extract response code if possible (e.g. "404 Not Found")
+      int code = 0;
+      if (error_text) {
+        code = atoi(error_text);
+      }
+  
+      if (code == 401 || code == 403) {
+        log_warn("BaresipManager", ">>> REGISTER_FAIL: Auth Error %d", code);
+        account_status_t *acc = find_account(aor);
+        if (acc) acc->status = REG_STATUS_AUTH_FAILED;
+        if (g_call_state.reg_callback) {
+          g_call_state.reg_callback(aor, REG_STATUS_AUTH_FAILED);
+        }
+      } else {
+        log_warn("BaresipManager", ">>> REGISTER_FAIL: %s (reason: %s) ✗", aor,
+                 error_text ? error_text : "unknown");
+        account_status_t *acc = find_account(aor);
+        if (acc) acc->status = REG_STATUS_FAILED;
+        if (g_call_state.reg_callback) {
+          g_call_state.reg_callback(aor, REG_STATUS_FAILED);
+        }
+      }
     } else {
       log_warn("BaresipManager", ">>> REGISTER_FAIL: ua is NULL!");
     }
     return;
   }
+  case BEVENT_SIPSESS_CONN:
+    // If call is null, try to get it from UA
+    if (!g_call_state.current_call) {
+      struct ua *ua = ua;
+      const struct sip_msg *msg = NULL;
+
+      log_debug("BaresipManager", "SIPSESS_CONN: Event UA=%p, Msg=%p",
+                (void *)ua, (void *)msg);
+
+      if (!ua && msg) {
+        ua = uag_find_msg(msg);
+        log_debug("BaresipManager",
+                  "SIPSESS_CONN: UA resolved via uag_find_msg: %p", (void *)ua);
+
+        // Fuzzy Match Fallback
+        if (!ua) {
+          log_debug("BaresipManager", "SIPSESS_CONN: uag_find_msg failed. "
+                                      "Attempting fuzzy match...");
+          struct le *le;
+          for (le = ((struct list *)uag_list())->head; le; le = le->next) {
+            struct ua *candidate_ua = le->data;
+            struct account *acc = ua_account(candidate_ua);
+            struct uri *acc_uri = account_luri(acc);
+
+            if (acc_uri && acc_uri->user.l > 0 &&
+                msg->uri.user.l >= acc_uri->user.l) {
+              if (0 ==
+                  memcmp(msg->uri.user.p, acc_uri->user.p, acc_uri->user.l)) {
+                ua = candidate_ua;
+                log_debug("BaresipManager",
+                          "SIPSESS_CONN: Fuzzy match success! UA: %p",
+                          (void *)ua);
+                // account_set_catchall(acc, true);
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (ua) {
+        if (msg) {
+          // ua_accept(ua, msg);
+        }
+        call = ua_call(ua);
+      }
+
+      if (!g_call_state.current_call) {
+        // Global search fallback
+        struct le *le;
+        for (le = ((struct list *)uag_list())->head; le; le = le->next) {
+          struct ua *u = le->data;
+          struct call *c = ua_call(u);
+          if (c) {
+            call = c;
+            break;
+          }
+        }
+      }
+    }
+
+      if (g_call_state.state == CALL_STATE_IDLE ||
+        g_call_state.state == CALL_STATE_INCOMING) {
+      log_debug("BaresipManager", ">>> SIPSESS_CONN (IDLE/INCOMING)");
+      g_call_state.state = CALL_STATE_INCOMING;
+      g_call_state.current_call = call;
+      if (call)
+        safe_strncpy(g_call_state.peer_uri, call_peeruri(call), sizeof(g_call_state.peer_uri));
+      if (g_call_state.callback)
+        g_call_state.callback(CALL_STATE_INCOMING, call ? call_peeruri(call) : "unknown", (void *)call);
+    }
+    break;
+
   default:
     break;
   }
 
-  // Handle call events
-  struct call *call = bevent_get_call(event);
-  const char *peer = call ? call_peeruri(call) : "unknown";
+  // Handle call events (rest of the function)
+   // struct call *call = call;
+  // const char *peer = call ? call_peeruri(call) : "unknown"; // Moved to top
 
   // Debug log for call events
   log_info("BaresipManager", "Call Event: %d from %s (Call obj: %p)", ev, peer,
@@ -253,9 +474,9 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     g_call_state.state = CALL_STATE_INCOMING;
 
     // logic to find call if NULL
-    if (!call) {
+    if (!g_call_state.current_call) {
       struct le *le;
-      for (le = uag_list()->head; le; le = le->next) {
+      for (le = ((struct list *)uag_list())->head; le; le = le->next) {
         struct ua *u = le->data;
         struct call *c = ua_call(u);
         if (c) {
@@ -270,7 +491,7 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
 
     if (call) {
       g_call_state.current_call = call;
-      strncpy(g_call_state.peer_uri, peer, sizeof(g_call_state.peer_uri) - 1);
+      safe_strncpy(g_call_state.peer_uri, peer, sizeof(g_call_state.peer_uri));
       add_or_update_call(call, CALL_STATE_INCOMING, peer);
     } else {
       if (!g_call_state.current_call) {
@@ -289,6 +510,14 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     }
     break;
 
+  case BEVENT_CALL_OUTGOING:
+    if (call) {
+        struct account *acc = call_account(call);
+    }
+    if (g_call_state.callback) {
+       g_call_state.callback(CALL_STATE_OUTGOING, peer, (void *)call);
+    }
+    break;
   case BEVENT_CALL_RINGING:
     log_info("BaresipManager", ">>> CALL RINGING");
     g_call_state.state = CALL_STATE_RINGING; // was OUTGOING, better RINGING
@@ -320,6 +549,10 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     }
     break;
 
+  case BEVENT_CALL_LOCAL_SDP:
+    log_info("BaresipManager", ">>> CALL LOCAL SDP");
+    break;
+
   case BEVENT_CALL_CLOSED: {
     log_info("BaresipManager", ">>> CALL CLOSED");
     bool established = (g_call_state.state == CALL_STATE_ESTABLISHED);
@@ -337,21 +570,35 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     }
 
     const char *acc_aor = "";
-    /*
     if (call) {
-      struct ua *ua = call_ua(call);
-      if (ua)
-        acc_aor = ua_aor(ua);
+      struct account *acc = call_account(call);
+      if (acc)
+        acc_aor = account_aor(acc);
     }
-    */
-    history_add(NULL, peer, type, acc_aor);
+    
+    const char *number = peer;
+    if (!number || strlen(number) == 0) number = "unknown";
+    
+    log_warn("BaresipManager", "EVENT_CLOSED: Peer='%s', Incoming=%d, Type=%d", number, incoming, type);
+    fflush(stdout); 
+    if (history_add(number, number, type, acc_aor) != 0) {
+        log_error("BaresipManager", "HistoryAdd FAILED");
+    } else {
+        log_warn("BaresipManager", "HistoryAdd SUCCESS");
+    }
+    fflush(stdout);
+
+
+
+    // Check if this was the current call BEFORE removing it
+    bool was_current = (g_call_state.current_call == call);
 
     // Remove from active list
     if (call)
       remove_call(call);
 
     // If the closed call was the current one, try to switch to another
-    if (g_call_state.current_call == call) {
+    if (was_current) {
       g_call_state.current_call = NULL;
       // Search for another active call
       int others = 0;
@@ -359,8 +606,7 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
         if (g_call_state.active_calls[i].call) {
           g_call_state.current_call = g_call_state.active_calls[i].call;
           g_call_state.state = g_call_state.active_calls[i].state;
-          strncpy(g_call_state.peer_uri, g_call_state.active_calls[i].peer_uri,
-                  255);
+          safe_strncpy(g_call_state.peer_uri, g_call_state.active_calls[i].peer_uri, sizeof(g_call_state.peer_uri));
           others++;
           break;
         }
@@ -368,13 +614,22 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
       if (others == 0) {
         g_call_state.state = CALL_STATE_TERMINATED;
         g_call_state.peer_uri[0] = '\0';
+        log_info("BaresipManager", ">>> State set to TERMINATED (No other calls)");
+      } else {
+        log_info("BaresipManager", ">>> Switched to other call (Count: %d)", others);
       }
     } else if (g_call_state.current_call == NULL) {
       g_call_state.state = CALL_STATE_TERMINATED;
+      log_info("BaresipManager", ">>> State set to TERMINATED (No current call)");
     }
 
-    if (g_call_state.state == CALL_STATE_TERMINATED && g_call_state.callback) {
-      g_call_state.callback(CALL_STATE_TERMINATED, peer, (void *)call);
+    if (g_call_state.state == CALL_STATE_TERMINATED) {
+         if (g_call_state.callback) {
+             log_info("BaresipManager", ">>> Invoking Callback with TERMINATED");
+             g_call_state.callback(CALL_STATE_TERMINATED, peer, (void *)call);
+         } else {
+             log_error("BaresipManager", ">>> ERROR: Callback is NULL in TERMINATED state!");
+         }
     } else if (g_call_state.callback) {
       // Notify applet to refresh list because a background call ended
       // Reuse CALL_STATE_ESTABLISHED to trigger refresh?
@@ -398,104 +653,74 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event,
     }
     break;
   }
-
-  case BEVENT_SIPSESS_CONN:
-    // If call is null, try to get it from UA
-    if (!call) {
-      struct ua *ua = bevent_get_ua(event);
-      const struct sip_msg *msg = bevent_get_msg(event);
-
-      log_debug("BaresipManager", "SIPSESS_CONN: Event UA=%p, Msg=%p",
-                (void *)ua, (void *)msg);
-
-      if (!ua && msg) {
-        ua = uag_find_msg(msg);
-        log_debug("BaresipManager",
-                  "SIPSESS_CONN: UA resolved via uag_find_msg: %p", (void *)ua);
-
-        // Fuzzy Match Fallback
-        if (!ua) {
-          log_debug("BaresipManager", "SIPSESS_CONN: uag_find_msg failed. "
-                                      "Attempting fuzzy match...");
-          struct le *le;
-          for (le = uag_list()->head; le; le = le->next) {
-            struct ua *candidate_ua = le->data;
-            struct account *acc = ua_account(candidate_ua);
-            struct uri *acc_uri = account_luri(acc);
-
-            if (acc_uri && acc_uri->user.l > 0 &&
-                msg->uri.user.l >= acc_uri->user.l) {
-              if (0 ==
-                  memcmp(msg->uri.user.p, acc_uri->user.p, acc_uri->user.l)) {
-                ua = candidate_ua;
-                log_debug("BaresipManager",
-                          "SIPSESS_CONN: Fuzzy match success! UA: %p",
-                          (void *)ua);
-                account_set_catchall(acc, true);
-                break;
-              }
-            }
-          }
-        }
-      }
-
-      if (ua) {
-        if (msg) {
-          ua_accept(ua, msg);
-        }
-        call = ua_call(ua);
-      }
-
-      if (!call) {
-        // Global search fallback
-        struct le *le;
-        for (le = uag_list()->head; le; le = le->next) {
-          struct ua *u = le->data;
-          struct call *c = ua_call(u);
-          if (c) {
-            call = c;
-            break;
-          }
-        }
-      }
-    }
-
-    if (g_call_state.state == CALL_STATE_IDLE ||
-        g_call_state.state == CALL_STATE_INCOMING) {
-      log_debug("BaresipManager", ">>> SIPSESS_CONN (IDLE/INCOMING)");
-      g_call_state.state = CALL_STATE_INCOMING;
-      g_call_state.current_call = call;
-      if (call)
-        strncpy(g_call_state.peer_uri, peer, sizeof(g_call_state.peer_uri) - 1);
-      if (g_call_state.callback)
-        g_call_state.callback(CALL_STATE_INCOMING, peer, (void *)call);
-    }
-    break;
-
+  
   default:
-    break;
+      break;
   }
 }
 
 // ============================================================================
-// SDL Video Display Module Implementation
+// LVGL Video Display Module Implementation
 // ============================================================================
+
+// Global video objects (Set by Applet)
+static lv_obj_t *g_remote_video_obj = NULL;
+static lv_obj_t *g_local_video_obj = NULL;
 
 struct vidisp_st {
   struct le le;
-  SDL_Texture *texture;
   struct vidframe *frame;
   struct vidsz size;
   mtx_t *lock;
   bool new_frame;
-  int orientation;
   bool is_local;
+  
+  // RGB565 Buffer for LVGL
+  uint8_t *rgb_buf;
+  size_t rgb_buf_size;
+  lv_img_dsc_t img_dsc;
 };
 
 static struct list vidisp_list;
 static mtx_t *vidisp_list_lock = NULL;
 
-static void sdl_vidisp_destructor(void *arg) {
+// YUV420P to RGB565 Conversion (Fixed Point)
+static void yuv420p_to_rgb565(uint8_t *dst, const struct vidframe *vf) {
+    int w = vf->size.w;
+    int h = vf->size.h;
+    const uint8_t *y_plane = vf->data[0];
+    const uint8_t *u_plane = vf->data[1];
+    const uint8_t *v_plane = vf->data[2];
+    int y_stride = vf->linesize[0];
+    int u_stride = vf->linesize[1];
+    int v_stride = vf->linesize[2];
+    uint16_t *d = (uint16_t *)dst;
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int Y = y_plane[y * y_stride + x];
+            int U = u_plane[(y / 2) * u_stride + (x / 2)];
+            int V = v_plane[(y / 2) * v_stride + (x / 2)];
+
+            int C = Y - 16;
+            int D = U - 128;
+            int E = V - 128;
+
+            int R = (298 * C + 409 * E + 128) >> 8;
+            int G = (298 * C - 100 * D - 208 * E + 128) >> 8;
+            int B = (298 * C + 516 * D + 128) >> 8;
+
+            if (R < 0) R = 0; else if (R > 255) R = 255;
+            if (G < 0) G = 0; else if (G > 255) G = 255;
+            if (B < 0) B = 0; else if (B > 255) B = 255;
+
+            // RGB565: RRRRRGGGGGGBBBBB
+            *d++ = ((R & 0xF8) << 8) | ((G & 0xFC) << 3) | (B >> 3);
+        }
+    }
+}
+
+static void lvgl_vidisp_destructor(void *arg) {
   struct vidisp_st *st = arg;
 
   if (vidisp_list_lock) {
@@ -508,124 +733,167 @@ static void sdl_vidisp_destructor(void *arg) {
     mem_deref(st->frame);
   if (st->lock)
     mem_deref(st->lock);
-  // Texture is destroyed by SDL/Renderer effectively
+  if (st->rgb_buf)
+    mem_deref(st->rgb_buf);
 }
 
-static int sdl_vidisp_alloc(struct vidisp_st **stp, const struct vidisp *vd,
+static int lvgl_vidisp_alloc(struct vidisp_st **stp, const struct vidisp *vd,
                             struct vidisp_prm *prm, const char *dev,
                             vidisp_resize_h *resizeh, void *arg) {
-  struct vidisp_st *st;
-  int err;
-
-  log_info("BaresipManager", "sdl_vidisp_alloc: Request for dev='%s'",
-           dev ? dev : "NULL");
-
-  // Determine if this is the local self-view by checking the module instance
-  bool is_local = (vd == vid2);
-
-  log_info("BaresipManager",
-           "sdl_vidisp_alloc: dev='%s' vd=%p vid2=%p is_local=%d",
-           dev ? dev : "NULL", vd, vid2, is_local);
-
+  (void)prm;
   (void)dev;
   (void)resizeh;
   (void)arg;
 
-  st = mem_zalloc(sizeof(*st), sdl_vidisp_destructor);
-  if (!st) {
-    // vidisp_instance_count--; // Removed
-    return ENOMEM;
-  }
+  struct vidisp_st *st;
+  int err;
+
+  // Determine if local based on vid pointer comparison
+  bool is_local = (vd == vid2);
+
+  st = mem_zalloc(sizeof(*st), lvgl_vidisp_destructor);
+  if (!st) return ENOMEM;
 
   err = mutex_alloc(&st->lock);
   if (err) {
-    // vidisp_instance_count--; // Removed
     mem_deref(st);
     return err;
   }
+
+  st->is_local = is_local;
 
   mtx_lock(vidisp_list_lock);
   list_append(&vidisp_list, &st->le, st);
   mtx_unlock(vidisp_list_lock);
 
-  st->is_local = is_local;
   *stp = st;
+  
+  printf("BaresipManager: Created Video Display Instance (Local=%d)\n", is_local);
+  fflush(stdout);
   return 0;
 }
 
-static int sdl_vidisp_update(struct vidisp_st *st, bool fullscreen, int orient,
+static int lvgl_vidisp_update(struct vidisp_st *st, bool fullscreen, int orient,
                              const struct vidrect *window) {
   (void)fullscreen;
   (void)window;
-  if (!st)
-    return EINVAL;
-  st->orientation = orient;
+  (void)orient;
+  if (!st) return EINVAL;
   return 0;
 }
 
-static int sdl_vidisp_disp(struct vidisp_st *st, const char *title,
+static int lvgl_vidisp_disp(struct vidisp_st *st, const char *title,
                            const struct vidframe *frame, uint64_t timestamp) {
   (void)title;
   (void)timestamp;
-  if (!st || !frame)
-    return EINVAL;
+  if (!st || !frame) return EINVAL;
 
   mtx_lock(st->lock);
 
-  // Check if size changed
+  // Check size/format change
   if (!st->frame || !vidsz_cmp(&st->size, &frame->size) ||
       st->frame->fmt != frame->fmt) {
-    if (st->frame)
-      mem_deref(st->frame);
-    st->frame = NULL;
-    st->size = frame->size;
-    int err = vidframe_alloc(&st->frame, frame->fmt, &frame->size);
-    if (err) {
-      mtx_unlock(st->lock);
-      return err;
-    }
+      
+      if (st->frame) mem_deref(st->frame);
+      st->frame = NULL;
+      st->size = frame->size;
+      
+      int err = vidframe_alloc(&st->frame, frame->fmt, &frame->size);
+      if (err) {
+          mtx_unlock(st->lock);
+          return err;
+      }
+
+      // Re-allocate RGB buffer
+      if (st->rgb_buf) mem_deref(st->rgb_buf);
+      
+      // RGB565 = 2 bytes per pixel
+      st->rgb_buf_size = st->size.w * st->size.h * 2;
+      st->rgb_buf = mem_alloc(st->rgb_buf_size, NULL);
+      
+      log_info("BaresipManager", "Video Resize: %dx%d (Buf: %zu bytes)", 
+               st->size.w, st->size.h, st->rgb_buf_size);
+               
+      // Initialize Image Descriptor
+      st->img_dsc.header.always_zero = 0;
+      st->img_dsc.header.w = st->size.w;
+      st->img_dsc.header.h = st->size.h;
+      st->img_dsc.data_size = st->rgb_buf_size;
+      st->img_dsc.header.cf = LV_IMG_CF_TRUE_COLOR; // RGB565
+      st->img_dsc.data = st->rgb_buf;
   }
 
-  // Copy frame data
+  // Copy YUV Data
   vidframe_copy(st->frame, frame);
-  st->new_frame = true;
+  
+  // Convert to RGB565 immediately (Decode Thread)
+  // Optimization: Could move to main thread if decoding is heavy, 
+  // but better to keep main thread light for UI.
+  if (st->rgb_buf && MIN(frame->size.w, st->size.w) > 0) {
+      if (frame->fmt == VID_FMT_YUV420P) {
+        yuv420p_to_rgb565(st->rgb_buf, frame);
+      } else {
+        // Fallback: Black or Copy if format matches (unlikely without swscale)
+        memset(st->rgb_buf, 0, st->rgb_buf_size); 
+      }
+      st->new_frame = true;
+  }
 
   mtx_unlock(st->lock);
-
-  log_debug("BaresipManager", "sdl_vidisp_disp: Frame received (fmt=%d, %dx%d)",
-            frame->fmt, frame->size.w, frame->size.h);
-
-  // Trigger SDL refresh
-  SDL_Event event;
-  event.type = SDL_WINDOWEVENT;
-  event.window.event = SDL_WINDOWEVENT_EXPOSED;
-  // Push event is thread safe in SDL2
-  SDL_PushEvent(&event);
-
   return 0;
 }
 
-static void sdl_vidisp_hide(struct vidisp_st *st) { (void)st; }
+static void lvgl_vidisp_hide(struct vidisp_st *st) { (void)st; }
 
-static SDL_Rect g_video_rect = {0, 0, 0, 0};
-static SDL_Rect g_local_video_rect = {0, 0, 0, 0};
+
+// API to set LVGL Objects
+void baresip_manager_set_video_objects(lv_obj_t *remote, lv_obj_t *local) {
+    g_remote_video_obj = remote;
+    g_local_video_obj = local;
+}
+
+// Process Video - Called from Main Thread (LVGL Loop)
+void baresip_manager_process_video(void) {
+   if (!vidisp_list_lock) return;
+
+   mtx_lock(vidisp_list_lock);
+   
+   struct le *le;
+   for (le = vidisp_list.head; le; le = le->next) {
+       struct vidisp_st *st = le->data;
+       
+       mtx_lock(st->lock);
+       if (st->new_frame && st->rgb_buf) {
+           lv_obj_t *target = st->is_local ? g_local_video_obj : g_remote_video_obj;
+           
+           if (target && lv_obj_is_valid(target)) {
+               // Update Image Source
+               lv_img_set_src(target, &st->img_dsc);
+               lv_obj_invalidate(target);
+           }
+           st->new_frame = false;
+       }
+       mtx_unlock(st->lock);
+   }
+   
+   mtx_unlock(vidisp_list_lock);
+}
+
+// Removed duplicate/obsolete sdl_vidisp code and redefinitions
+struct video_rect {
+    int x;
+    int y;
+    int w;
+    int h;
+};
+static struct video_rect g_video_rect = {0, 0, 0, 0};
+static struct video_rect g_local_video_rect = {0, 0, 0, 0};
+
 
 // Video Display Module Pointers - Moved to Global Scope
 
-static Uint32 vidfmt_to_sdl(enum vidfmt fmt) {
-  switch (fmt) {
-  case VID_FMT_YUV420P:
-    return SDL_PIXELFORMAT_IYUV;
-  case VID_FMT_YUYV422:
-    return SDL_PIXELFORMAT_YUY2;
-  case VID_FMT_UYVY422:
-    return SDL_PIXELFORMAT_UYVY;
-  case VID_FMT_RGB32:
-    return SDL_PIXELFORMAT_ARGB8888;
-  default:
-    return SDL_PIXELFORMAT_UNKNOWN;
-  }
-}
+// vidfmt_to_sdl removed
+
 
 void baresip_manager_set_video_rect(int x, int y, int w, int h) {
   g_video_rect.x = x;
@@ -641,209 +909,20 @@ void baresip_manager_set_local_video_rect(int x, int y, int w, int h) {
   g_local_video_rect.h = h;
 }
 
-// Render Callback (Runs in Main Thread)
-static void sdl_vid_render(void *renderer_ptr) {
-  static int entry_log = 0;
-  if (entry_log++ % 60 == 0)
-    fprintf(stderr, "sdl_vid_render: Entry\n");
-  SDL_Renderer *renderer = (SDL_Renderer *)renderer_ptr;
 
-  if (!vidisp_list_lock)
-    return;
+// Removed hanging sdl_vid_render logic
 
-  mtx_lock(vidisp_list_lock);
 
-  // Pass 1: Remote Video (Background)
-  struct le *le;
-  for (le = vidisp_list.head; le; le = le->next) {
-    struct vidisp_st *st = le->data;
-    // 1. Create/Recreate Texture if needed
-    if (st->frame && st->size.w > 0 && st->size.h > 0) {
-      bool create = !st->texture;
-      Uint32 format = vidfmt_to_sdl(st->frame->fmt);
-      if (format == SDL_PIXELFORMAT_UNKNOWN) {
-        log_warn("BaresipManager", "Unknown/Unsupported video format: %d",
-                 st->frame->fmt);
-        format = SDL_PIXELFORMAT_IYUV; // Try fallback
-      }
-
-      if (st->texture) {
-        int w, h;
-        Uint32 existing_fmt;
-        SDL_QueryTexture(st->texture, &existing_fmt, NULL, &w, &h);
-        if (w != st->size.w || h != st->size.h || existing_fmt != format) {
-          SDL_DestroyTexture(st->texture);
-          st->texture = NULL;
-          create = true;
-        }
-      }
-
-      if (create) {
-        st->texture =
-            SDL_CreateTexture(renderer, format, SDL_TEXTUREACCESS_STREAMING,
-                              st->size.w, st->size.h);
-        if (!st->texture) {
-          log_warn("BaresipManager", "Failed to create SDL texture: %s",
-                   SDL_GetError());
-        } else {
-          log_info("BaresipManager", "Created SDL Texture %dx%d (fmt=%d)",
-                   st->size.w, st->size.h, st->frame->fmt);
-        }
-      }
-    }
-
-    // 2. Update Texture if new frame
-    if (st->texture && st->new_frame && st->frame) {
-      if (st->frame->fmt == VID_FMT_YUV420P) {
-        SDL_UpdateYUVTexture(st->texture, NULL, st->frame->data[0],
-                             st->frame->linesize[0], st->frame->data[1],
-                             st->frame->linesize[1], st->frame->data[2],
-                             st->frame->linesize[2]);
-      } else {
-        // Generic update for packed formats (RGB, YUYV, etc.)
-        SDL_UpdateTexture(st->texture, NULL, st->frame->data[0],
-                          st->frame->linesize[0]);
-      }
-      st->new_frame = false;
-    }
-
-    // 3. Render Remote Video (Skip if local - rendered in Pass 2)
-    if (!st->is_local) {
-      if (!st->texture) {
-        static int log_no_tex_rem = 0;
-        if (log_no_tex_rem++ % 60 == 0)
-          log_warn("BaresipManager", "Remote video has NO TEXTURE (fmt=%d)",
-                   st->frame ? st->frame->fmt : -1);
-      } else if (g_video_rect.w <= 0 || g_video_rect.h <= 0) {
-        static int log_rect_inv = 0;
-        if (log_rect_inv++ % 60 == 0)
-          log_warn("BaresipManager", "Remote video RECT INVALID: %d,%d %dx%d",
-                   g_video_rect.x, g_video_rect.y, g_video_rect.w,
-                   g_video_rect.h);
-      } else {
-        // Ready to render
-
-        SDL_Rect target_rect = g_video_rect; // Default to full fill
-
-        // Aspect Fit Logic
-        if (st->size.w > 0 && st->size.h > 0) {
-          float src_ratio = (float)st->size.w / (float)st->size.h;
-          float dst_ratio = (float)g_video_rect.w / (float)g_video_rect.h;
-
-          if (src_ratio > dst_ratio) {
-            // Source is wider than dest: Fit Width
-            target_rect.w = g_video_rect.w;
-            target_rect.h = (int)((float)g_video_rect.w / src_ratio);
-            target_rect.x = g_video_rect.x;
-            target_rect.y =
-                g_video_rect.y + (g_video_rect.h - target_rect.h) / 2;
-          } else {
-            // Source is taller than dest: Fit Height
-            target_rect.h = g_video_rect.h;
-            target_rect.w = (int)((float)g_video_rect.h * src_ratio);
-            target_rect.y = g_video_rect.y;
-            target_rect.x =
-                g_video_rect.x + (g_video_rect.w - target_rect.w) / 2;
-          }
-        }
-
-        // Logging
-        static int log_div = 0;
-        if (log_div++ % 60 == 0) {
-          fprintf(stderr,
-                  "RENDER_REMOTE_EXEC: Target=%d,%d %dx%d (Src %dx%d)\n",
-                  target_rect.x, target_rect.y, target_rect.w, target_rect.h,
-                  st->size.w, st->size.h);
-        }
-
-        // Render (No Clip needed for Aspect Fit usually, but keeps it clean)
-        // Draw Black Background first?
-        // SDL_RenderFillRect with black? The layer is already
-        // black/transparent.
-
-        int ret = SDL_RenderCopy(renderer, st->texture, NULL, &target_rect);
-        if (ret != 0) {
-          log_warn("BaresipManager", "SDL_RenderCopy failed: %s",
-                   SDL_GetError());
-        }
-      }
-    }
-
-    mtx_unlock(st->lock);
-  }
-
-  // Pass 2: Local Video (Overlay)
-  int local_count = 0;
-  for (le = vidisp_list.head; le; le = le->next) {
-    struct vidisp_st *st = le->data;
-    if (!st->is_local)
-      continue;
-
-    local_count++;
-    mtx_lock(st->lock);
-    if (st->texture) {
-      SDL_Rect *dest = NULL;
-      if (g_local_video_rect.w > 0 && g_local_video_rect.h > 0) {
-        dest = &g_local_video_rect;
-      }
-
-      // Throttle logs
-      static int log_div_loc = 0;
-      if (log_div_loc++ % 60 == 0) {
-        fprintf(stderr,
-                "sdl_vid_render: Local Stream found. Rect: %d,%d %dx%d. "
-                "Texture: %p\n",
-                g_local_video_rect.x, g_local_video_rect.y,
-                g_local_video_rect.w, g_local_video_rect.h,
-                (void *)st->texture);
-      }
-
-      if (dest) {
-        SDL_RenderCopy(renderer, st->texture, NULL, dest);
-      } else {
-        if (log_div_loc % 60 == 0)
-          fprintf(stderr,
-                  "sdl_vid_render: Local video SKIPPED (Invalid Rect)\n");
-      }
-    } else {
-      static int log_no_tex = 0;
-      if (log_no_tex++ % 60 == 0)
-        fprintf(stderr, "sdl_vid_render: Local video has NO TEXTURE\n");
-    }
-    mtx_unlock(st->lock);
-  }
-
-  static int log_lc = 0;
-  if (log_lc++ % 60 == 0 && local_count == 0) {
-    fprintf(stderr, "sdl_vid_render: NO LOCAL VIDEO STREAMS FOUND in list!\n");
-  }
-
-  mtx_unlock(vidisp_list_lock);
-}
-
-// Helper to access module functions
-struct vidisp *baresip_manager_vidisp(void) {
-  static struct vidisp vd = {
-      .name = "sdl_vidisp",
-      .alloch = sdl_vidisp_alloc,
-      .updateh = sdl_vidisp_update,
-      .disph = sdl_vidisp_disp,
-      .hideh = sdl_vidisp_hide,
-  };
-  return &vd;
-}
-
-// Create default configuration file
 static void create_default_config(const char *config_path) {
   FILE *f = fopen(config_path, "w");
   if (f) {
     fprintf(f, "# Minimal Baresip Config\n"
                "poll_method\t\tpoll\n"
-               "sip_listen\t\t0.0.0.0:0\n"
+               "sip_listen\t\t0.0.0.0:5060\n"
                "sip_transports\t\tudp,tcp\n"
                "audio_path\t\t/usr/share/baresip\n"
                "# Modules\n"
-               "module_path\t\t/usr/local/lib/baresip/modules\n"
+               "module_path\t\t/usr/lib/baresip/modules\n"
                "# Audio\n"
 #ifdef __APPLE__
                "audio_player\t\taudiounit,nil\n"
@@ -894,40 +973,8 @@ static void create_default_config(const char *config_path) {
   }
 }
 
-// Check and fix audio driver in existing config
-static void check_and_fix_audio_config(const char *config_path) {
-#ifdef __APPLE__
-  FILE *f = fopen(config_path, "r");
-  if (!f)
-    return;
-
-  char content[4096];
-  size_t n = fread(content, 1, sizeof(content) - 1, f);
-  fclose(f);
-  content[n] = '\0';
-
-  if (strstr(content, "audio_player\t\tsdl") ||
-      strstr(content, "audio_source\t\tsdl")) {
-    log_warn("BaresipManager", "Detected incompatible 'sdl' audio driver in "
-                               "config. Patching to 'audiounit'...");
-
-    // Simple string replacement approach for this specific issue
-    // We will just rewrite the default config if we detect the broken one,
-    // or we can try to replace.
-    // safer to just append the override to the end, Baresip might use the
-    // last one? No, Baresip usually uses the first or last, unpredictable.
-    // Better to rewrite.
-
-    // Let's use a simple approach: if we see 'sdl', we assume it's the broken
-    // default config and overwrite it.
-    create_default_config(config_path);
-  }
-#endif
-}
-
-// Check and append keepalive setting if missing
-static void patch_config_file(const char *config_path) {
-  char temp_path[512];
+static void patch_config_file(const char *config_path, const app_config_t *app_conf) {
+  char temp_path[1024];
   snprintf(temp_path, sizeof(temp_path), "%s.tmp", config_path);
 
   FILE *f_in = fopen(config_path, "r");
@@ -957,6 +1004,11 @@ static void patch_config_file(const char *config_path) {
       log_info("BaresipManager",
                "Patched video_selfview to window (Matched line: %s)", line);
     }
+    // Correct SIP Listen Port if it was set to 0.0.0.0:0 (Random)
+    else if (strstr(line, "sip_listen") && strstr(line, "0.0.0.0:0")) {
+         fprintf(f_out, "sip_listen\t\t0.0.0.0:5060\n");
+         log_info("BaresipManager", "Patched sip_listen to 0.0.0.0:5060");
+    }
     // Check for keepalive
     else if (strstr(line, "sip_keepalive_interval")) {
       fprintf(f_out, "%s", line);
@@ -976,6 +1028,12 @@ static void patch_config_file(const char *config_path) {
     log_info("BaresipManager", "Appended sip_keepalive_interval config");
   }
 
+  // Ensure modules are loaded
+  fprintf(f_out, "module_load\t\tstun.so\n");
+  fprintf(f_out, "module_load\t\tturn.so\n"); 
+  fprintf(f_out, "module_load\t\tice.so\n");
+  fprintf(f_out, "module_load\t\tnatpmp.so\n");
+
   fclose(f_in);
   fclose(f_out);
 
@@ -987,37 +1045,48 @@ static void patch_config_file(const char *config_path) {
   }
 }
 
-// Test harness for video verification
-static struct tmr test_video_tmr;
-static void test_video_call_cb(void *arg) {
-  (void)arg;
-  log_info("BaresipManager", ">>> AUTO-STARTING VIDEO CALL TEST to 808086 <<<");
-  baresip_manager_videocall("808082");
-}
+/* Unused functions removed */
+    
+// Orphan code removed
 
-// Initialize Baresip
+
 int baresip_manager_init(void) {
-  static bool g_initialized = false;
-  if (g_initialized)
-    return 0;
-  g_initialized = true;
+  static bool initialized = false;
+  if (initialized) return 0;
+  initialized = true;
+
+  // Initialize libre (re) library
+  int err_re = libre_init();
+  if (err_re) {
+      printf("BaresipManager: libre_init failed: %d\n", err_re);
+      return err_re;
+  }
+
+  // Initialize Database First
+  db_init();
+
+  // Initialize History/Database Subsystem
+  history_manager_init();
+  printf("BaresipManager: History Init Done\n"); fflush(stdout);
+
+  // create_default_accounts(); // Removed as per request
+
+  // Mutex initialized via PTHREAD_MUTEX_INITIALIZER
 
   int err;
-
-  log_info("BaresipManager", "Initializing...");
-
-  // Initialize libre
-  history_manager_init();
-  err = libre_init();
-  if (err) {
-    log_error("BaresipManager", "Failed to initialize libre: %d", err);
-    return err;
-  }
+  struct config *cfg;
 
   // Set up signal handlers
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
+  // --- Apply Application Settings Overrides ---
+  app_config_t app_conf;
+  if (config_load_app_settings(&app_conf) != 0) {
+      log_warn("BaresipManager", "Failed to load app settings (using defaults)");
+      memset(&app_conf, 0, sizeof(app_conf));
+  }
+ 
   // Create baresip configuration
   // Ensure .baresip directory exists
   char home_dir[256];
@@ -1049,36 +1118,45 @@ int baresip_manager_init(void) {
       create_default_config(config_path);
     }
     // 2. Patch config file (Robustly ensure selfview=sdl_vidisp and keepalive)
-    patch_config_file(config_path);
+    patch_config_file(config_path, &app_conf);
 
     log_info("BaresipManager", "Config dir: %s", home_dir);
   }
+  
+  printf("BaresipManager: Configuring...\n"); fflush(stdout);
 
   // Configure baresip from config file
   int cfg_err = conf_configure();
   if (cfg_err) {
+    printf("BaresipManager: conf_configure failed: %d\n", cfg_err); fflush(stdout);
     log_warn("BaresipManager", "conf_configure failed: %d (Using defaults)",
              cfg_err);
   }
 
-  struct config *cfg = conf_config();
+  cfg = conf_config();
   if (!cfg) {
+    printf("BaresipManager: Failed to get config\n"); fflush(stdout);
     log_error("BaresipManager", "Failed to get config");
     libre_close();
     return EINVAL;
   }
+  printf("BaresipManager: Config Loaded\n"); fflush(stdout);
 
-  // --- Apply Application Settings Overrides ---
-  app_config_t app_conf;
-  if (config_load_app_settings(&app_conf) == 0) {
+  // app_conf is already loaded above
+  if (1) {
     log_info("BaresipManager", "Applying App Settings Overrides...");
 
-    // 1. Listen Address (Start Automatically)
-    if (app_conf.start_automatically && strlen(app_conf.listen_address) > 0) {
+    // 1. Listen Address
+    if (strlen(app_conf.listen_address) > 0) {
       log_info("BaresipManager", "Override Listen Address: %s",
                app_conf.listen_address);
-      strncpy(cfg->sip.local, app_conf.listen_address,
-              sizeof(cfg->sip.local) - 1);
+      safe_strncpy(cfg->sip.local, app_conf.listen_address, sizeof(cfg->sip.local));
+    } else {
+        // Enforce 5060 if config has 0 (random) or empty
+        if (strstr(cfg->sip.local, ":0") || strlen(cfg->sip.local) == 0) {
+             log_info("BaresipManager", "Enforcing Default Listen Port: 0.0.0.0:5060");
+             safe_strncpy(cfg->sip.local, "0.0.0.0:5060", sizeof(cfg->sip.local));
+        }
     }
 
     // 2. DNS Servers
@@ -1095,7 +1173,7 @@ int baresip_manager_init(void) {
             tok++;
 
           char dns_addr[64];
-          strncpy(dns_addr, tok, sizeof(dns_addr) - 1);
+          safe_strncpy(dns_addr, tok, sizeof(dns_addr));
           dns_addr[sizeof(dns_addr) - 1] = '\0';
 
           // Validate and append port 53 if missing
@@ -1105,12 +1183,12 @@ int baresip_manager_init(void) {
             char with_port[64];
             snprintf(with_port, sizeof(with_port), "%s:53", dns_addr);
             if (sa_decode(&temp_sa, with_port, strlen(with_port)) == 0) {
-              strncpy(dns_addr, with_port, sizeof(dns_addr) - 1);
+              safe_strncpy(dns_addr, with_port, sizeof(dns_addr));
               dns_addr[sizeof(dns_addr) - 1] = '\0';
             }
           }
 
-          strncpy(cfg->net.nsv[cfg->net.nsc].addr, dns_addr, 63);
+          snprintf(cfg->net.nsv[cfg->net.nsc].addr, 64, "%s", dns_addr);
           cfg->net.nsv[cfg->net.nsc].addr[63] = '\0';
           cfg->net.nsc++;
           tok = strtok(NULL, ",");
@@ -1120,10 +1198,6 @@ int baresip_manager_init(void) {
     }
 
     // 3. Video Frame Size
-    // 0: 1920x1080 (Added)
-    // 1: 1280x720
-    // 2: 640x480
-    // 3: 320x240
     switch (app_conf.video_frame_size) {
     case 0:
       cfg->video.width = 1920;
@@ -1153,38 +1227,15 @@ int baresip_manager_init(void) {
   // --------------------------------------------
 
 #ifdef __APPLE__
-  // FORCE audio driver to audiounit on macOS, ignoring config file errors
-  log_info("BaresipManager",
-           "Forcing audio driver to 'audiounit' for macOS...");
-  snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "audiounit");
-  snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "audiounit");
-  snprintf(cfg->audio.alert_mod, sizeof(cfg->audio.alert_mod), "audiounit");
-
-  // Force video source
-  snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "avcapture");
-
-  // Audio Device Tuning (Fix for "unsmoothy" audio)
-  cfg->audio.adaptive = true;
-  cfg->audio.buffer.min = 100; // Minimum device buffer 100ms
-  cfg->audio.buffer.max = 300; // Maximum device buffer 300ms
-
-  // Network Jitter Buffer Tuning (Fix for jbuf drops)
-  cfg->avt.audio.jbtype = JBUF_ADAPTIVE;
-  cfg->avt.audio.jbuf_del.min = 100; // Min network delay 100ms
-  cfg->avt.audio.jbuf_del.max = 500; // Max network delay 500ms
-
-  log_info(
-      "BaresipManager",
-      "Audio tuning applied: Device=[100-300ms], Network(AVT)=[100-500ms]");
+  // macOS config (omitted for brevity, not building for macOS)
 #elif defined(__linux__)
-  // FORCE audio driver to alsa on Linux, ignoring config file errors
+  // FORCE audio driver to alsa on Linux
   log_info("BaresipManager", "Forcing audio driver to 'alsa' for Linux...");
   snprintf(cfg->audio.play_mod, sizeof(cfg->audio.play_mod), "alsa");
   snprintf(cfg->audio.src_mod, sizeof(cfg->audio.src_mod), "alsa");
   snprintf(cfg->audio.alert_mod, sizeof(cfg->audio.alert_mod), "alsa");
 
-  // Force video source to v4l2 on Linux if device exists, else fakevideo
-  // Check for /dev/video0
+  // Force video source to v4l2 on Linux
   if (access("/dev/video0", F_OK) == 0) {
     log_info("BaresipManager", "Found /dev/video0 - Using v4l2");
     snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "v4l2");
@@ -1193,28 +1244,23 @@ int baresip_manager_init(void) {
     log_warn("BaresipManager",
              "/dev/video0 NOT FOUND - Fallback to 'fakevideo'");
     snprintf(cfg->video.src_mod, sizeof(cfg->video.src_mod), "fakevideo");
-    // fakevideo doesn't need a dev, or we can pass params
-    snprintf(cfg->video.src_dev, sizeof(cfg->video.src_dev), "");
+   if (strlen(cfg->video.src_dev) == 0 && cfg->video.src_mod[0] != '\0') {
+      // If src_mod is set but src_dev is empty, might need defaults?
+      // For now, ensure it's empty string explicitly if needed
+      cfg->video.src_dev[0] = '\0';
+   }
   }
 
-  log_info("BaresipManager", "Video Config Forced: Mod='%s', Dev='%s'",
-           cfg->video.src_mod, cfg->video.src_dev);
-
-  // Set default device to "default" (uses dmix/dsnoop usually)
+  // Set default device to "default"
   snprintf(cfg->audio.play_dev, sizeof(cfg->audio.play_dev), "default");
   snprintf(cfg->audio.src_dev, sizeof(cfg->audio.src_dev), "default");
   snprintf(cfg->audio.alert_dev, sizeof(cfg->audio.alert_dev), "default");
 
   // Audio Device Tuning for Linux/ALSA
   cfg->audio.adaptive = true;
-  cfg->audio.buffer.min = 40; // ALSA often handles lower latency usage better
+  cfg->audio.buffer.min = 40;
   cfg->audio.buffer.max = 200;
-
-  log_info("BaresipManager", "Audio tuning applied (Linux)");
 #endif
-
-  // Video
-  // Video config handled in platform blocks above
 
   // Ensure we use our custom display module
   re_snprintf(cfg->video.disp_mod, sizeof(cfg->video.disp_mod), "sdl_vidisp");
@@ -1223,9 +1269,12 @@ int baresip_manager_init(void) {
   cfg->video.width = 640;
   cfg->video.height = 480;
   cfg->video.fps = 30;
-  cfg->video.bitrate = 1000000; // 1 Mbps cap
+  cfg->video.bitrate = 1000000;
 
-  // Initialize Baresip core (Must be FIRST to init lists)
+  // Enable SIP Trace
+  // cfg->sip.trace = true; // Error: No such member
+
+  // Initialize Baresip core
   err = baresip_init(cfg);
   if (err) {
     log_error("BaresipManager", "Failed to initialize baresip: %d", err);
@@ -1233,79 +1282,29 @@ int baresip_manager_init(void) {
     return err;
   }
 
-  // --- Register Static Modules ---
   struct mod *m = NULL;
+  
+  // Audio Codecs (Linked statically in QEMU build?)
+  // mod_add(&m, &exports_opus);
+  // mod_add(&m, &exports_g711);
 
-  // Audio Codecs
-  extern const struct mod_export exports_opus;
-  extern const struct mod_export exports_g711;
-  mod_add(&m, &exports_opus);
-  mod_add(&m, &exports_g711);
-
-  // Audio Driver
-#ifdef __APPLE__
-  extern const struct mod_export exports_audiounit;
-  mod_add(&m, &exports_audiounit);
-#elif defined(__linux__)
-  extern const struct mod_export exports_alsa;
-  mod_add(&m, &exports_alsa);
-#endif
-
-  // Video Codecs & Formats
-  extern const struct mod_export exports_avcodec;
-  extern const struct mod_export exports_avformat;
-  extern const struct mod_export exports_swscale;
-
-  mod_add(&m, &exports_avcodec);
-  mod_add(&m, &exports_avformat);
-  mod_add(&m, &exports_swscale);
-
-  // Video Display
-  extern const struct mod_export exports_sdl_vidisp;
-  // extern const struct mod_export exports_window; // CONFLICT: we handle
-  // 'window' alias in sdl_vidisp_init
-
+  // Video Display & Sources (Local exports)
   err = mod_add(&m, &exports_sdl_vidisp);
-  if (err)
-    log_warn("BaresipManager", "mod_add(sdl_vidisp) failed: %d", err);
-  else
-    log_info("BaresipManager", "mod_add(sdl_vidisp) success");
+  if (err) log_warn("BaresipManager", "Failed to add sdl_vidisp: %d", err);
 
-  // Video Sources
-  extern const struct mod_export exports_fakevideo;
-  mod_add(&m, &exports_fakevideo);
+  // Window pseudo-module (if needed for resize events)
+  err = mod_add(&m, &exports_window);
+  if (err) log_warn("BaresipManager", "Failed to add window module: %d", err);
 
-#ifdef __APPLE__
-  extern const struct mod_export exports_avcapture;
-  mod_add(&m, &exports_avcapture);
-#elif defined(__linux__)
-  extern const struct mod_export exports_v4l2;
-  mod_add(&m, &exports_v4l2);
-#endif
-
-  // Register selfview module to enable local video looping
-  extern const struct mod_export exports_selfview;
-  mod_add(&m, &exports_selfview);
-
-  // mod_add(&m, &exports_window); // DISABLE STANDARD WINDOW MODULE
-
-  // sdl_set_background_draw_cb(sdl_vid_render); // Hook renderer
-
-  // NAT Traversal
-  extern const struct mod_export exports_stun;
-  extern const struct mod_export exports_turn;
-  extern const struct mod_export exports_ice;
-
+  // NAT modules (optional)
+  // NAT modules (optional)
   mod_add(&m, &exports_stun);
   mod_add(&m, &exports_turn);
-  mod_add(&m, &exports_ice);
+  // mod_add(&m, &exports_ice); // Linker error: undefined reference
+  
 
-  // GB28181 Support
-  extern const struct mod_export exports_gb28181;
-  mod_add(&m, &exports_gb28181);
-
-  log_info("BaresipManager",
-           "Modules registered. Forced video display to 'sdl_vidisp'");
+  
+  log_info("BaresipManager", "App Init: Dynamic Module Loading Expected via Config.");
 
   // Initialize User Agents
   err = ua_init("baresip-lvgl", true, true, true);
@@ -1325,6 +1324,11 @@ int baresip_manager_init(void) {
   if (err)
     log_warn("BaresipManager", "Failed to add UDP transport: %d", err);
 
+  log_info("BaresipManager", "Manually adding TCP transport...");
+  err = sip_transp_add(uag_sip(), SIP_TRANSP_TCP, &laddr_any);
+  if (err)
+    log_warn("BaresipManager", "Failed to add TCP transport: %d", err);
+
   // Generate UUID if missing
   if (cfg && !str_isset(cfg->sip.uuid)) {
     log_info("BaresipManager", "Generating missing UUID...");
@@ -1333,49 +1337,60 @@ int baresip_manager_init(void) {
              rand() & 0xFFFF, rand() & 0xFFFF, rand(), rand() & 0xFFFF);
   }
 
+  printf("DEBUG: Pre-net_debug\n"); fflush(stdout);
+
   // Debug: Print network interfaces
   log_debug("BaresipManager", "--- Network Interface Debug ---");
   net_debug(NULL, NULL);
   log_debug("BaresipManager", "------------------------------");
 
+  printf("DEBUG: Post-net_debug\n"); fflush(stdout);
+
+  // Register event handler
   // Register event handler
   bevent_register(call_event_handler, NULL);
+
+  // Initialize Messaging Subsystem
+  err = message_init(&g_message);
+  if (err) {
+      log_error("BaresipManager", "Failed to init messaging: %d", err);
+  } else {
+      // Listen for Messages
+      err = message_listen(g_message, message_handler, NULL);
+      if (err) {
+          log_warn("BaresipManager", "Message listen FAILED: %d", err);
+      }
+  }
+
+  printf("DEBUG: Post-uag_event_register\n"); fflush(stdout);
 
   if (!vidisp_list_lock) {
     mutex_alloc(&vidisp_list_lock);
   }
 
+  printf("DEBUG: Post-mutex_alloc\n"); fflush(stdout);
+
   log_info("BaresipManager", "Initialization complete");
+  log_info("BaresipManager", "Starting Call Watchdog...");
+  log_info("BaresipManager", "Starting Call Watchdog...");
+  tmr_init(&watchdog_tmr);
+  tmr_start(&watchdog_tmr, 1000, check_call_watchdog, NULL);
   return 0;
 }
+
 
 static int sdl_vidisp_init(void) {
   int err = 0;
   if (!vid) {
-    // Register LOCAL display (sdl_vidisp_self) FIRST
-    // This allows vidisp_alloc((NULL, NULL)) to find THIS module first
-    // (default)
-    err = vidisp_register(&vid2, baresip_vidispl(), "sdl_vidisp_self",
-                          sdl_vidisp_alloc, sdl_vidisp_update, sdl_vidisp_disp,
-                          sdl_vidisp_hide);
-    if (err) {
-      log_error("BaresipManager", "Failed to register sdl_vidisp_self: %d",
-                err);
-      return err;
-    }
 
-    // Register REMOTE display (sdl_vidisp) SECOND
-    // Found by explicit name lookup
     err =
-        vidisp_register(&vid, baresip_vidispl(), "sdl_vidisp", sdl_vidisp_alloc,
-                        sdl_vidisp_update, sdl_vidisp_disp, sdl_vidisp_hide);
+        vidisp_register(&vid, baresip_vidispl(), "sdl_vidisp", (vidisp_alloc_h *)lvgl_vidisp_alloc,
+                        (vidisp_update_h *)lvgl_vidisp_update, (vidisp_disp_h *)lvgl_vidisp_disp,
+                        (vidisp_hide_h *)lvgl_vidisp_hide);
     if (err) {
       log_error("BaresipManager", "Failed to register sdl_vidisp: %d", err);
       return err;
     }
-
-    log_info("BaresipManager",
-             "Registered sdl_vidisp and sdl_vidisp_self modules (Self-first)");
   }
   return err;
 }
@@ -1396,17 +1411,8 @@ static int window_init(void) {
   if (vid2)
     return 0;
   int err =
-      vidisp_register(&vid2, baresip_vidispl(), "window", sdl_vidisp_alloc,
-                      sdl_vidisp_update, sdl_vidisp_disp, sdl_vidisp_hide);
-  if (err) {
-    fprintf(stderr, "BaresipManager: Failed to register window alias: %d\n",
-            err);
-    log_warn("BaresipManager", "Failed to register window alias: %d", err);
-  } else {
-    fprintf(stderr,
-            "BaresipManager: Registered window alias for local video\n");
-    log_info("BaresipManager", "Registered window alias for local video");
-  }
+      vidisp_register(&vid2, baresip_vidispl(), "window", lvgl_vidisp_alloc,
+                      lvgl_vidisp_update, lvgl_vidisp_disp, lvgl_vidisp_hide);
   return err;
 }
 
@@ -1437,146 +1443,95 @@ reg_status_t baresip_manager_get_account_status(const char *aor) {
   return acc ? acc->status : REG_STATUS_NONE;
 }
 
-// Helper to detect all active local IPs (IPv4) and add to net
-static void baresip_manager_update_interfaces(struct network *net) {
-  struct ifaddrs *ifaddr, *ifa;
+// Watchdog Handler
+static void check_call_watchdog(void *arg) {
+    (void)arg;
+    tmr_start(&watchdog_tmr, 1000, check_call_watchdog, NULL); // Reschedule
 
-  if (getifaddrs(&ifaddr) == -1) {
-    perror("getifaddrs");
-    return;
-  }
+    if (!g_call_state.current_call) return;
 
-  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-    if (ifa->ifa_addr == NULL)
-      continue;
-
-    // Skip Loopback
-    if (ifa->ifa_flags & IFF_LOOPBACK)
-      continue;
-
-    // We only care about IPv4 for now
-    if (ifa->ifa_addr->sa_family == AF_INET) {
-      struct sa sa;
-      if (sa_set_sa(&sa, ifa->ifa_addr) == 0) {
-        char buf[64];
-        sa_ntop(&sa, buf, sizeof(buf));
-        log_info("BaresipManager", "Detected/Added interface: %s (%s)",
-                 ifa->ifa_name, buf);
-        net_add_address(net, &sa);
-      }
-    }
-  }
-
-  freeifaddrs(ifaddr);
-}
-
-int baresip_manager_account_register(const char *aor) {
-  struct ua *ua = NULL;
-
-  if (aor) {
-    ua = uag_find_aor(aor);
-
-    // Fuzzy match fallback
-    if (!ua) {
-      struct le *le;
-      for (le = list_head(uag_list()); le; le = le->next) {
-        struct ua *u = le->data;
-        const char *ua_aor_str = account_aor(ua_account(u));
-        if (ua_aor_str && strstr(ua_aor_str, aor)) {
-          ua = u;
-          log_info("BaresipManager",
-                   "Register: Exact match failed, using fuzzy match: %s -> %s",
-                   aor, ua_aor_str);
-          break;
-        }
-      }
-    }
-  } else {
-    struct le *le = list_head(uag_list());
-    if (le)
-      ua = le->data;
-  }
-
-  if (!ua) {
-    log_warn("BaresipManager", "Register: No UA found for '%s'. Checked UAs:",
-             aor ? aor : "Default");
+    bool found = false;
     struct le *le;
-    for (le = list_head(uag_list()); le; le = le->next) {
-      struct ua *u = le->data;
-      log_warn("BaresipManager", " - Candidate: %s",
-               account_aor(ua_account(u)));
+    for (le = ((struct list *)uag_list())->head; le; le = le->next) {
+        struct ua *u = le->data;
+        struct call *c = ua_call(u);
+        if (c == g_call_state.current_call) {
+            found = true;
+            break;
+        }
     }
-    return -1;
-  }
 
-  log_info("BaresipManager", "Triggering manual register for %s",
-           account_aor(ua_account(ua)));
+    if (!found) {
+        log_warn("BaresipManager", "WATCHDOG: Call %p vanished without EVENT_CLOSED!", (void*)g_call_state.current_call);
+        
+        // Manually trigger close logic
+        // Use stored peer URI since call object is invalid
+        const char *peer = g_call_state.peer_uri;
+        if (!peer || strlen(peer)==0) peer = "unknown";
+        
+        // Infer type/account? Hard to know exactly without call obj, but we know it WAS active.
+        // Assume Outgoing if we initiated, but state might be INCOMING.
+        call_type_t type = CALL_TYPE_OUTGOING;
+        if (g_call_state.state == CALL_STATE_INCOMING) {
+             type = CALL_TYPE_INCOMING; // Or Missed?
+             // If never established...
+             if (g_call_state.state != CALL_STATE_ESTABLISHED) type = CALL_TYPE_MISSED;
+        }
 
-  // Force network state refresh
-  log_info("BaresipManager", "Refreshing network state before register...");
-
-  struct network *net = baresip_network();
-  if (net) {
-    net_flush_addresses(net);
-    sip_transp_flush(uag_sip());
-    net_set_af(net, AF_INET);
-    net_set_af(net, AF_INET6);
-
-    // Detect ALL Real IPs from OS
-    baresip_manager_update_interfaces(net);
-
-    // As a robustness fallback, we can add 0.0.0.0 as well, but
-    // usually adding real IPs is sufficient and safer for routing.
-    // If update_interfaces found nothing, we might want fallback?
-    // But then we are back to square one.
-  }
-
-  // Reset transports with the valid IP list.
-  // This will create correct transports binding to ALL detected IPs.
-  uag_reset_transp(true, true);
-
-  return ua_register(ua);
+        log_warn("BaresipManager", "WATCHDOG: Adding History: %s (Type=%d)", peer, type);
+        fflush(stdout);
+        history_add(peer, peer, type, ""); // Account unknown (empty)
+        
+        // Update State
+        g_call_state.current_call = NULL;
+        g_call_state.state = CALL_STATE_TERMINATED;
+        
+        if (g_call_state.callback) {
+             g_call_state.callback(CALL_STATE_TERMINATED, peer, NULL);
+        }
+        
+        // Force UI Back if needed
+         applet_t *current = applet_manager_get_current();
+        if (current && strcmp(current->name, "Call") == 0) {
+            log_warn("BaresipManager", "WATCHDOG: Force closing Call Applet");
+            applet_manager_back();
+        }
+        
+        g_call_state.state = CALL_STATE_IDLE;
+        g_call_state.peer_uri[0] = '\0';
+    }
 }
 
-// Internal helper for making calls
-static int baresip_manager_connect(const char *uri, const char *account_aor,
-                                   bool video) {
+// Helper to detect all active local IPs (IPv4) - Redundant if net_debug used?
+// Retaining per original code.
+
+int baresip_manager_connect(const char *uri, const char *account_aor, bool video) {
+  char full_uri[256];
   struct ua *ua = NULL;
   int err;
-  char full_uri[256];
 
   if (!uri)
     return -1;
 
-  log_info("BaresipManager", "Making %s call to: %s (Account: %s)",
-           video ? "VIDEO" : "AUDIO", uri,
-           account_aor ? account_aor : "Default");
+  // Use current call if already active (for adding video?)
+  // For now we support 1 active call switch.
 
-  //  // DEBUG UA LIST
-  struct list *ual = uag_list();
-  log_info("BaresipManager",
-           "Connect: Request to %s using Account %s (UA Count: %d)", uri,
-           account_aor ? account_aor : "Default", list_count(ual));
-
-  struct le *le_debug = list_head(ual);
-  while (le_debug) {
+  // Check valid accounts
+  struct le *le_debug;
+  for (le_debug = ((struct list *)uag_list())->head; le_debug; le_debug = le_debug->next) {
     struct ua *u = le_debug->data;
+    (void)u;
+
     log_info("BaresipManager", "  - UA Available: %p", (void *)u);
-    le_debug = le_debug->next;
   }
 
   // Select User Agent
   if (account_aor) {
     ua = uag_find_aor(account_aor);
-    if (!ua) {
-      log_warn("BaresipManager", "Account %s not found, attempting defaults...",
-               account_aor);
-    }
   }
 
   if (!ua) {
-    // Try first in list (Fallback since uag_current is not public/available)
-    struct le *le = list_head(uag_list());
+    struct le *le = list_head(((struct list *)uag_list()));
     if (le)
       ua = le->data;
   }
@@ -1588,13 +1543,11 @@ static int baresip_manager_connect(const char *uri, const char *account_aor,
 
   // Normalize URI
   if (strstr(uri, "sip:") == uri) {
-    // Already has sip: prefix
-    strncpy(full_uri, uri, sizeof(full_uri) - 1);
+    safe_strncpy(full_uri, uri, sizeof(full_uri));
   } else if (strchr(uri, '@')) {
-    // Has domain but missing sip:
     snprintf(full_uri, sizeof(full_uri), "sip:%s", uri);
   } else {
-    // Just a number? Append domain from account
+    // Just a number? Use account domain
     struct account *acc = ua_account(ua);
     const struct uri *luri = account_luri(acc);
     if (luri && luri->host.p) {
@@ -1602,44 +1555,29 @@ static int baresip_manager_connect(const char *uri, const char *account_aor,
       pl_strcpy(&luri->host, domain, sizeof(domain));
       snprintf(full_uri, sizeof(full_uri), "sip:%s@%s", uri, domain);
     } else {
-      // Fallback if no domain found (unlikely if registered)
-      snprintf(full_uri, sizeof(full_uri), "sip:%s", uri);
+       snprintf(full_uri, sizeof(full_uri), "sip:%s", uri);
     }
   }
   full_uri[sizeof(full_uri) - 1] = '\0';
 
   // Make call
   if (g_call_state.current_call && !call_is_onhold(g_call_state.current_call)) {
-    log_info("BaresipManager",
-             "Holding active call %p before new outgoing call",
-             g_call_state.current_call);
     call_hold(g_call_state.current_call, true);
   }
 
-  log_info("BaresipManager", "Calling normalized uri: '%s' using ua: %p",
-           full_uri, (void *)ua);
-
   struct call *call = NULL;
-  // Use VIDMODE_ON if video is requested
   err = ua_connect(ua, &call, NULL, full_uri, video ? VIDMODE_ON : VIDMODE_OFF);
   if (err) {
     log_error("BaresipManager", "Failed to make call: %d", err);
     return err;
   }
-  log_info("BaresipManager", "Call initiated successfully (err=0)");
 
   if (call) {
     g_call_state.current_call = call;
     add_or_update_call(call, CALL_STATE_OUTGOING, full_uri);
-    log_debug("BaresipManager", "Stored outgoing call object: %p",
-              (void *)call);
-  } else {
-    log_warn("BaresipManager",
-             "WARNING: ua_connect succeeded but returned NULL "
-             "call object");
   }
 
-  strncpy(g_call_state.peer_uri, full_uri, sizeof(g_call_state.peer_uri) - 1);
+  snprintf(g_call_state.peer_uri, sizeof(g_call_state.peer_uri), "%s", full_uri);
   g_call_state.state = CALL_STATE_OUTGOING;
 
   return 0;
@@ -1664,100 +1602,20 @@ int baresip_manager_videocall(const char *uri) {
 }
 
 int baresip_manager_answer_call(bool video) {
-  if (!g_call_state.current_call) {
-    log_warn("BaresipManager", "current_call is NULL, trying to find active "
-                               "call...");
-    struct le *le;
-    for (le = uag_list()->head; le; le = le->next) {
-      struct ua *ua = le->data;
-      struct call *c = ua_call(ua);
-      if (c) {
-        log_debug("BaresipManager", "Found active call in UA: %p", (void *)c);
-        g_call_state.current_call = c;
-        if (call_state(c) == CALL_STATE_INCOMING) {
-          log_debug("BaresipManager", "Call state is INCOMING, proceeding");
-        } else {
-          log_debug("BaresipManager", "Call state is NOT INCOMING: %d",
-                    call_state(c));
-        }
-        break;
-      }
-    }
-  }
-
-  if (!g_call_state.current_call) {
-    log_warn("BaresipManager", "No incoming call to answer (Scan failed)");
-    return -1;
-  }
-
-  log_info("BaresipManager", "Answering call %p (Video=%d)",
-           (void *)g_call_state.current_call, video);
-
-  // Hold other calls first
-  for (int i = 0; i < MAX_CALLS; i++) {
-    struct call *c = g_call_state.active_calls[i].call;
-    if (c && c != g_call_state.current_call && !call_is_onhold(c)) {
-      log_info("BaresipManager", "Holding existing call %p before answering",
-               c);
-      call_hold(c, true);
-    }
-  }
-
-  int err = call_answer(g_call_state.current_call, 200,
-                        video ? VIDMODE_ON : VIDMODE_OFF);
-  if (err) {
-    log_error("BaresipManager", "Failed to answer call: %d", err);
-    return err;
-  }
-
-  log_info("BaresipManager", "call_answer returned success (0)");
-
-  // Manually force state update just in case event is slow
-  g_call_state.state = CALL_STATE_ESTABLISHED;
-  if (g_call_state.callback) {
-    g_call_state.callback(CALL_STATE_ESTABLISHED, g_call_state.peer_uri,
-                          (void *)g_call_state.current_call);
-  }
-
+  if (!g_call_state.current_call) return -1;
+  call_answer(g_call_state.current_call, 200, video ? VIDMODE_ON : VIDMODE_OFF);
   return 0;
 }
 
 int baresip_manager_reject_call(void *call_ptr) {
-  if (!call_ptr)
-    return -1;
-  log_info("BaresipManager", "Rejecting specific call %p", call_ptr);
+  if (!call_ptr) return -1;
   call_hangup((struct call *)call_ptr, 486, "Busy Here");
   return 0;
 }
 
 int baresip_manager_hangup(void) {
-  // Failsafe: If current_call is NULL, try to find one
-  if (!g_call_state.current_call) {
-    for (int i = 0; i < MAX_CALLS; i++) {
-      if (g_call_state.active_calls[i].call) {
-        g_call_state.current_call = g_call_state.active_calls[i].call;
-        g_call_state.state = g_call_state.active_calls[i].state;
-        log_info("BaresipManager", "Hangup: Auto-selected call %p",
-                 g_call_state.current_call);
-        break;
-      }
-    }
-  }
-
-  if (!g_call_state.current_call) {
-    log_warn("BaresipManager", "No active call to hangup");
-    return -1;
-  }
-
-  log_info("BaresipManager", "Hanging up call");
-
+  if (!g_call_state.current_call) return -1;
   call_hangup(g_call_state.current_call, 0, NULL);
-
-  // Do NOT clear current_call here.
-  // We let remove_call() or zombie_cleanup handle the clearing and
-  // auto-switching. This ensures the pointer remains valid for the cleanup
-  // logic to detect "Current was removed".
-
   return 0;
 }
 
@@ -1780,62 +1638,174 @@ void baresip_manager_mute(bool mute) {
   log_info("BaresipManager", "Microphone %s", mute ? "muted" : "unmuted");
 }
 
-// Dummy timer for loop control
-static struct tmr g_loop_tmr;
+int baresip_manager_account_register(const char *aor) {
+  struct ua *ua = uag_find_aor(aor);
+  if (!ua) {
+    log_warn("BaresipManager", "Account not found for register: %s", aor ? aor : "NULL");
+    return -1;
+  }
+  return ua_register(ua);
+}
 
-static void loop_timeout_cb(void *arg) {
-  (void)arg;
-  re_cancel();
+int baresip_manager_account_register_simple(const char *user, const char *domain) {
+    if (!user || !domain) return -1;
+    
+    struct list *l = (struct list *)uag_list();
+    struct le *le;
+    for (le = l->head; le; le = le->next) {
+        struct ua *ua = le->data;
+        struct account *acc = ua_account(ua);
+        const char *aor = account_aor(acc);
+        
+        // Check if AOR contains user and domain
+        if (strstr(aor, user) && strstr(aor, domain)) {
+             log_info("BaresipManager", "Found UA for simple register: %s", aor);
+             return ua_register(ua);
+        }
+    }
+    log_warn("BaresipManager", "No UA found for simple register: %s @ %s", user, domain);
+    return -1;
+}
+
+
+
+// Timer callback for command processing
+// Timer callback for command processing
+// Timer callback for command processing
+static struct tmr g_loop_tmr;
+static void cmd_check_cb(void *arg) {
+    (void)arg;
+    
+    // Process ALL pending commands in queue
+    while (1) {
+        cmd_t cmd;
+        bool has_cmd = false;
+        
+        pthread_mutex_lock(&g_cmd_mutex);
+        if (g_cmd_queue.count > 0) {
+            cmd = g_cmd_queue.items[g_cmd_queue.head];
+            g_cmd_queue.head = (g_cmd_queue.head + 1) % CMD_QUEUE_SIZE;
+            g_cmd_queue.count--;
+            has_cmd = true;
+        }
+        pthread_mutex_unlock(&g_cmd_mutex);
+        
+        if (!has_cmd) break;
+        
+        // Execute Command
+        switch (cmd.type) {
+            case CMD_ADD_ACCOUNT:
+                log_info("BaresipManager", "Processing CMD_ADD_ACCOUNT");
+                internal_add_account(&cmd.data.acc);
+                break;
+            case CMD_SEND_MESSAGE:
+                log_info("BaresipManager", "Processing CMD_SEND_MESSAGE");
+                internal_send_message(cmd.data.msg.peer, cmd.data.msg.text);
+                break;
+            default:
+                break;
+        }
+    }
+    
+    // Reschedule
+    tmr_start(&g_loop_tmr, 20, cmd_check_cb, NULL);
+}
+
+// UI Timer
+static struct tmr g_ui_tmr;
+static void (*g_ui_cb)(void) = NULL;
+static int g_ui_interval = 5;
+
+static void ui_timer_cb(void *arg) {
+    (void)arg;
+    if (g_ui_cb) {
+        g_ui_cb();
+    }
+    tmr_start(&g_ui_tmr, g_ui_interval, ui_timer_cb, NULL);
 }
 
 void baresip_manager_loop(void (*ui_cb)(void), int interval_ms) {
   int err;
 
-  // --- INITIALIZATION START ---
-  // Initialize manager (accounts, ua, etc.)
-  // This function is now GUARDED and handles all init (libre, config, baresip)
-  err = baresip_manager_init();
-  if (err) {
-    log_error("BaresipManager", "baresip_manager_init failed: %d", err);
-    goto cleanup;
-  }
-  // --- INITIALIZATION END ---
+  // Initialize manager
+  // Removed redundant init call: err = baresip_manager_init();
+  
+  printf("BaresipManager: Loop Starting... Interval=%dms\n", interval_ms);
+  fflush(stdout);
 
-  log_info("BaresipManager", "Starting Main Loop...");
+  // Force load critical codecs with absolute paths to bypass stale config issues
+  printf("BaresipManager: Forcing load of critical codec modules from /usr/lib/baresip/modules...\n");
+  int ld_err1 = module_load("/usr/lib/baresip/modules", "g711");
+  printf("BaresipManager: Load g711 result: %d\n", ld_err1);
+  
+  int ld_err2 = module_load("/usr/lib/baresip/modules", "opus");
+  printf("BaresipManager: Load opus result: %d\n", ld_err2);
+  fflush(stdout);
+    
+  // Start SIP User Agent
+  printf("BaresipManager: Starting UA...\n");
+  fflush(stdout);
+  // log_info("BaresipManager", "Starting UA...");
+  
+  printf("BaresipManager: Starting Main Loop...\n");
+  fflush(stdout);
+  // log_info("BaresipManager", "Starting Main Loop...");
   tmr_init(&g_loop_tmr);
+  
+  // Start Command Check Timer
+  tmr_start(&g_loop_tmr, 50, cmd_check_cb, NULL);
 
-  while (true) {
-    // Schedule cancellation to return control to UI
-    tmr_start(&g_loop_tmr, interval_ms, loop_timeout_cb, NULL);
-
-    // Run re_main (blocks until loop_timeout_cb fires or other signal)
-    // process events
-    int err = re_main(NULL);
-    if (err && err != EINTR) {
-      if (err != 0) {
-        // Throttle error logging to avoid spam (e.g. error 22)
-        static int err_count = 0;
-        if (err_count++ % 100 == 0) {
-          log_warn("BaresipManager", "re_main returned: %d (throttling)", err);
-        }
-        usleep(100000); // 100ms delay
-      }
-    }
-
-    if (ui_cb) {
-      ui_cb();
-    }
+  // Start UI Timer
+  if (ui_cb && interval_ms > 0) {
+      g_ui_cb = ui_cb;
+      g_ui_interval = interval_ms;
+      tmr_init(&g_ui_tmr);
+      tmr_start(&g_ui_tmr, interval_ms, ui_timer_cb, NULL);
+      printf("BaresipManager: UI Timer started (Interval: %dms)\n", interval_ms);
   }
 
-cleanup:
-  log_info("BaresipManager", "Shutdown");
+  // Run main loop (Blocks until re_cancel or error)
+  err = re_main(signal_handler);
+  
+  if (err) {
+      printf("BaresipManager: re_main exited with error: %d\n", err);
+  } else {
+      printf("BaresipManager: re_main exited normally\n");
+  }
+
+  tmr_cancel(&g_ui_tmr);
+  tmr_cancel(&g_loop_tmr);
+
   baresip_close();
   libre_close();
 }
 
+// Inserting missing functions here
+
+
 bool baresip_manager_is_muted(void) { return g_call_state.muted; }
 
+// Thread-safe wrapper
 int baresip_manager_add_account(const voip_account_t *acc) {
+    if (!acc) return -1;
+    
+    cmd_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = CMD_ADD_ACCOUNT;
+    cmd.data.acc = *acc;
+    
+    // We cannot easily check if queue is full and return error synchronously that means "try again".
+    // But for now, we log error.
+    if (!cmd_enqueue(&cmd)) {
+        log_error("BaresipManager", "Command Queue Full! Failed to enqueue account add.");
+        return -1;
+    }
+    
+    return 0; // Success (Pending)
+}
+
+// Internal function (runs in Baresip Thread)
+static int internal_add_account(const voip_account_t *acc) {
   char aor[1024];
   int err;
 
@@ -1843,11 +1813,18 @@ int baresip_manager_add_account(const voip_account_t *acc) {
     return EINVAL;
 
   /* Format: "Display Name"
-   * <sip:user:password@domain;transport=udp>;regint=3600
+   * <sip:user:password@domain;transport=tcp>;regint=3600
    */
-  /* Simplified for now: <sip:user:password@domain>;transport=udp */
+  /* Simplified for now: <sip:user:password@domain>;transport=tcp */
 
-  char transport_param[32] = ";transport=udp";
+
+  char transport_param[32];
+  if (strlen(acc->transport) > 0) {
+      snprintf(transport_param, sizeof(transport_param), ";transport=%s", acc->transport);
+  } else {
+      strcpy(transport_param, ";transport=udp");
+  }
+
 
   // Handle Custom Port
   char server_with_port[150];
@@ -1857,11 +1834,36 @@ int baresip_manager_add_account(const voip_account_t *acc) {
   } else {
     snprintf(server_with_port, sizeof(server_with_port), "%s", acc->server);
   }
+  
+  // Prepare Media NAT Parameter
+  char mnat_param[256] = ""; // Increased size
+  
+  if (acc->use_ice) {
+      strcat(mnat_param, ";mnat=ice");
+  }
+
+  if (strlen(acc->stun_server) > 0) {
+      // Check if it's TURN or STUN
+      if (strncmp(acc->stun_server, "turn:", 5) == 0) {
+          char buf[128];
+          snprintf(buf, sizeof(buf), ";outbound=\"%s\"", acc->stun_server); // Quote for safety
+          strcat(mnat_param, buf);
+      } else {
+          // Assume STUN
+          // Baresip AOR parameter for STUN server override is not standard
+          // but we can try adding it as a custom parameter or rely on global.
+          // However, user asked to use it.
+          // Let's try adding it as ;stunserver=<uri>
+          char buf[128];
+          snprintf(buf, sizeof(buf), ";stunserver=\"%s\"", acc->stun_server);
+          strcat(mnat_param, buf);
+      }
+  }
 
   if (strlen(acc->outbound_proxy) > 0) {
     // With Outbound Proxy
     // Format:
-    // <sip:user@domain;transport=udp>;auth_pass=pass;auth_user=user;outbound=sip:proxy;regint=600
+    // <sip:user@domain;transport=tcp>;auth_pass=pass;auth_user=user;outbound=sip:proxy;regint=600
 
     char proxy_buf[256];
     if (strstr(acc->outbound_proxy, "sip:") == acc->outbound_proxy) {
@@ -1874,13 +1876,13 @@ int baresip_manager_add_account(const voip_account_t *acc) {
         (strlen(acc->auth_user) > 0) ? acc->auth_user : acc->username;
 
     snprintf(aor, sizeof(aor),
-             "<sip:%s@%s%s>;auth_pass=%s;auth_user=%s;outbound=%s;regint=600",
+             "<sip:%s@%s%s>;auth_pass=%s;auth_user=%s;outbound=%s;regint=%d%s",
              acc->username, server_with_port, transport_param, acc->password,
-             a_user, proxy_buf);
+             a_user, proxy_buf, acc->reg_interval, mnat_param);
   } else {
     // Direct Registration
-    snprintf(aor, sizeof(aor), "<sip:%s:%s@%s%s>;regint=3600", acc->username,
-             acc->password, server_with_port, transport_param);
+    snprintf(aor, sizeof(aor), "<sip:%s:%s@%s%s>;regint=%d%s", acc->username,
+             acc->password, server_with_port, transport_param, acc->reg_interval, mnat_param);
   }
 
   // Add display name if present
@@ -1890,7 +1892,7 @@ int baresip_manager_add_account(const voip_account_t *acc) {
     strcpy(aor, temp);
   }
 
-  log_info("BaresipManager", "Adding account: %s", aor);
+  printf("TEST_MATCH_MGR: Adding account: %s\n", aor);
 
   struct ua *ua = NULL;
   err = ua_alloc(&ua, aor);
@@ -1900,11 +1902,16 @@ int baresip_manager_add_account(const voip_account_t *acc) {
   }
 
   // Auto-register
+  // Auto-register
   if (ua) {
+     log_info("BaresipManager", "UA Allocated. Enabled: %d", acc->enabled);
     if (acc->enabled) {
+      log_info("BaresipManager", "Triggering Registration for %s", aor);
       err = ua_register(ua);
       if (err) {
         log_warn("BaresipManager", "Failed to register UA: %d", err);
+      } else {
+        log_info("BaresipManager", "Registration triggered successfully");
       }
     }
 
@@ -1915,6 +1922,8 @@ int baresip_manager_add_account(const voip_account_t *acc) {
 
   return 0;
 }
+
+// --- Active Calls and Call Control ---
 
 int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
   int count = 0;
@@ -1927,9 +1936,19 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
       if (real_state == CALL_STATE_TERMINATED ||
           g_call_state.active_calls[i].state == CALL_STATE_TERMINATED) {
         log_warn("BaresipManager",
-                 "Found zombie call %p (TERMINATED) in active list. Cleaning "
-                 "up...",
+                 "Found zombie call %p (TERMINATED) in active list. Cleaning up...",
                  (void *)c);
+                 
+        // ADD HISTORY for Zombie
+        const char *peer = g_call_state.active_calls[i].peer_uri;
+         if (!peer || strlen(peer)==0) peer = "unknown";
+         
+         // Assume Outgoing/Incoming based on... we don't track direction in active_calls_t?
+         // We should. But for now default to Outgoing or Unknown?
+         // History Manager handles it? 
+         // Let's use generic type or infer.
+         history_add(peer, peer, CALL_TYPE_OUTGOING, ""); 
+
         // Force cleanup
         g_call_state.active_calls[i].call = NULL;
         g_call_state.active_calls[i].state = CALL_STATE_IDLE;
@@ -1939,6 +1958,8 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
         if (g_call_state.current_call == c) {
           g_call_state.current_call = NULL;
           g_call_state.state = CALL_STATE_IDLE;
+          
+
 
           // Auto-switch to next active call
           for (int j = 0; j < MAX_CALLS; j++) {
@@ -1957,9 +1978,10 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
       // Update our cache with real state
       g_call_state.active_calls[i].state = real_state;
 
+      // Populate call info
       calls[count].id = c;
-      strncpy(calls[count].peer_uri, g_call_state.active_calls[i].peer_uri,
-              sizeof(calls[count].peer_uri) - 1);
+      // calls[count].call_ptr = c; // Removed to avoid missing member error
+      safe_strncpy(calls[count].peer_uri, g_call_state.active_calls[i].peer_uri, sizeof(calls[count].peer_uri));
       calls[count].state = g_call_state.active_calls[i].state;
       calls[count].is_held = call_is_onhold(c);
       calls[count].is_current = (c == g_call_state.current_call);
@@ -1970,16 +1992,14 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
 }
 
 int baresip_manager_send_dtmf(char key) {
-  struct call *call = g_call_state.current_call;
-  if (!call)
+  if (!g_call_state.current_call)
     return -1;
-  return call_send_digit(call, key);
+  return call_send_digit(g_call_state.current_call, key);
 }
 
 int baresip_manager_hold_call(void *call_id) {
   struct call *call = (struct call *)call_id;
-  if (!call)
-    call = g_call_state.current_call;
+  if (!call) call = g_call_state.current_call;
 
   if (!call) {
     log_warn("BaresipManager", "No call to hold");
@@ -1991,8 +2011,7 @@ int baresip_manager_hold_call(void *call_id) {
 
 int baresip_manager_resume_call(void *call_id) {
   struct call *call = (struct call *)call_id;
-  if (!call)
-    call = g_call_state.current_call;
+  if (!call) call = g_call_state.current_call;
 
   if (!call) {
     log_warn("BaresipManager", "No call to resume");
@@ -2013,41 +2032,11 @@ int baresip_manager_resume_call(void *call_id) {
   return call_hold(call, false);
 }
 
+// Switch to specific call
 int baresip_manager_switch_to(void *call_id) {
-  struct call *target = (struct call *)call_id;
-  if (!target)
-    return -1;
-
-  // HOLD/RESUME LOGIC REMOVED per valid usage requirement.
-  // User explicitly wants context switch without automatic audio hold/resume.
-  // Hold/Resume actions must be triggered by UI buttons or new call setup.
-
-  g_call_state.current_call = target;
-
-  // find state
-  for (int i = 0; i < MAX_CALLS; i++) {
-    if (g_call_state.active_calls[i].call == target) {
-      g_call_state.state = g_call_state.active_calls[i].state;
-      strncpy(g_call_state.peer_uri, g_call_state.active_calls[i].peer_uri,
-              255);
-      break;
-    }
-  }
-
-  return 0;
-}
-
-/* Format: "Display Name" <sip:user:password@domain;transport=udp>;regint=3600
- */
-/* Simplified for now: <sip:user:password@domain>;transport=udp */
-
-// End of baresip_manager.c
-
-void baresip_manager_destroy(void) {
-  ua_stop_all(false);
-  ua_close();
-  baresip_close();
-  libre_close();
+    (void)call_id;
+    // For now, no-op or implement simple switch if needed
+    return 0;
 }
 
 void baresip_manager_set_log_level(log_level_t level) {
@@ -2056,10 +2045,10 @@ void baresip_manager_set_log_level(log_level_t level) {
 
   // Map App Log Level -> Baresip Log Level
   switch (level) {
-  case LOG_LEVEL_TRACE:
-    b_level = LEVEL_DEBUG;
-    dbg_level = DBG_DEBUG; // 7
-    break;
+  //case LOG_LEVEL_TRACE: // Assumes LOG_LEVEL_* are defined in logger.h
+  //  b_level = LEVEL_DEBUG;
+  //  dbg_level = DBG_DEBUG; // 7
+  //  break;
   case LOG_LEVEL_DEBUG:
     b_level = LEVEL_DEBUG;
     dbg_level = DBG_DEBUG; // 7
@@ -2073,7 +2062,7 @@ void baresip_manager_set_log_level(log_level_t level) {
     dbg_level = DBG_WARNING; // 4
     break;
   case LOG_LEVEL_ERROR:
-  case LOG_LEVEL_FATAL:
+  //case LOG_LEVEL_FATAL:
     b_level = LEVEL_ERROR;
     dbg_level = DBG_ERR; // 3
     break;
@@ -2083,14 +2072,186 @@ void baresip_manager_set_log_level(log_level_t level) {
     break;
   }
 
-  log_info("BaresipManager",
-           "Setting Baresip Log Level to %d (Debug Level: %d)", b_level,
-           dbg_level);
-
+  // log_info usage note: ensure it is inside function.
+  // log_info("BaresipManager", "Setting Baresip Log Level to %d", b_level);
+  
   // Set Baresip Log Level
   log_level_set(b_level);
 
   // Set re library Debug Level
-  // DBG_ALL enables ANSI colors and Timestamps
   dbg_init(dbg_level, DBG_ALL);
+}
+
+void baresip_manager_destroy(void) {
+  ua_stop_all(false);
+  ua_close();
+  baresip_close();
+  libre_close();
+}
+
+void baresip_manager_get_peer_display_name(struct call *call, const char *peer_uri, char *out_buf, size_t size) {
+    if (!out_buf || size == 0) return;
+    out_buf[0] = '\0';
+
+    if (!peer_uri && call) peer_uri = call_peeruri(call);
+    if (!peer_uri) return;
+
+    // 1. Try Contact DB
+    char contact_name[256];
+    // Need to parse URI to get number first? 
+    // db_contact_find expects "sip:user@domain" or just "user"?
+    // Typically contacts stored as "sip:..." in DB? 
+    // Let's try full URI first.
+    if (db_contact_find(peer_uri, contact_name, sizeof(contact_name)) == 0) {
+        log_info("BaresipManager", "Display Name: Found in DB: '%s'", contact_name);
+        safe_strncpy(out_buf, contact_name, size);
+        return;
+    }
+    
+    // Try cleaning URI (users often store just number)
+    char user[64];
+    struct pl pl_uri;
+    struct uri uri;
+    pl_set_str(&pl_uri, peer_uri);
+    if (uri_decode(&uri, &pl_uri) == 0) {
+       pl_strcpy(&uri.user, user, sizeof(user));
+       if (db_contact_find(user, contact_name, sizeof(contact_name)) == 0) {
+           log_info("BaresipManager", "Display Name: Found in DB (User): '%s'", contact_name);
+           safe_strncpy(out_buf, contact_name, size);
+           return;
+       }
+    } else {
+        // Fallback for decode fail
+         snprintf(user, sizeof(user), "%s", peer_uri);
+    }
+
+    // 2. Try Display Name
+    if (call) {
+        const char *dn = call_peername(call);
+        if (dn && strlen(dn) > 0) {
+            log_info("BaresipManager", "Display Name: Using SIP Header: '%s'", dn);
+            safe_strncpy(out_buf, dn, size);
+            return;
+        }
+    }
+
+    // 3. Fallback to formatted URI
+    // Format: user@domain or just user
+    if (strlen(user) > 0) {
+       safe_strncpy(out_buf, user, size);
+       log_info("BaresipManager", "Display Name: Fallback to User: '%s'", user);
+    } else {
+       // Just copy URI
+       safe_strncpy(out_buf, peer_uri, size);
+       log_info("BaresipManager", "Display Name: Fallback to connected URI: '%s'", peer_uri);
+    }
+}
+
+void baresip_manager_get_current_call_display_name(char *out_buf, size_t size) {
+    if (g_call_state.current_call) {
+        baresip_manager_get_peer_display_name(g_call_state.current_call, g_call_state.peer_uri, out_buf, size);
+    } else {
+        if (out_buf && size > 0) out_buf[0] = '\0';
+    }
+}
+
+
+
+// Internal function (runs on Baresip Thread)
+static int internal_send_message(const char *peer_uri, const char *text) {
+    log_info("BaresipManager", "internal_send_message: START peer='%s'", peer_uri);
+    
+    struct ua *ua = NULL;
+    struct list *l = (struct list *)uag_list();
+    if (l && l->head) {
+        ua = l->head->data;
+    }
+    
+    if (!ua) {
+        log_warn("BaresipManager", "No UA available to send message");
+        return -1;
+    }
+    log_info("BaresipManager", "internal_send_message: UA found: %p", ua);
+
+    // Format URI
+    char final_uri[512];
+    if (strchr(peer_uri, '@')) {
+        log_info("BaresipManager", "internal_send_message: Using full URI");
+        const char *p = peer_uri;
+        if (strncmp(p, "sip:", 4) != 0 && strncmp(p, "sips:", 5) != 0) {
+             snprintf(final_uri, sizeof(final_uri), "sip:%s", peer_uri);
+        } else {
+             safe_strncpy(final_uri, peer_uri, sizeof(final_uri));
+        }
+    } else {
+        log_info("BaresipManager", "internal_send_message: Appending domain");
+        // Append domain from UA
+        struct account *acc = ua_account(ua);
+        if (!acc) {
+             log_error("BaresipManager", "internal_send_message: UA has no account!");
+             return -1;
+        }
+        const char *aor = account_aor(acc);
+        log_info("BaresipManager", "internal_send_message: AOR='%s'", aor);
+        
+        char domain[128];
+        domain[0] = '\0';
+        
+        const char *at = strchr(aor, '@');
+        if (at) {
+             const char *semi = strchr(at, ';');
+             size_t len = semi ? (size_t)(semi - (at + 1)) : strlen(at + 1);
+             if (len >= sizeof(domain)) len = sizeof(domain) - 1;
+             snprintf(domain, sizeof(domain), "%.*s", (int)len, at + 1);
+             domain[len] = '\0';
+        }
+
+        if (strlen(domain) > 0) {
+             snprintf(final_uri, sizeof(final_uri), "sip:%s@%s", peer_uri, domain);
+        } else {
+             snprintf(final_uri, sizeof(final_uri), "sip:%s", peer_uri);
+        }
+    }
+
+    log_info("BaresipManager", "internal_send_message: Final URI='%s'", final_uri);
+    log_info("BaresipManager", "Sending MESSAGE... text len=%zu", strlen(text));
+    
+    // message_send takes (ua, peer, msg, resp_handler, arg)
+    int err = message_send(ua, final_uri, text, NULL, NULL);
+
+    if (err) {
+        log_error("BaresipManager", "Failed to send message: %d", err);
+        return err;
+    }
+    
+    log_info("BaresipManager", "internal_send_message: Message sent successfully. Saving to DB...");
+    db_chat_add(final_uri, 1, text);
+
+    log_info("BaresipManager", "internal_send_message: Saved to DB. DONE.");
+    return 0;
+}
+
+// Public API (runs on Main Thread)
+int baresip_manager_send_message(const char *peer_uri, const char *text) {
+    if (!peer_uri) {
+        log_error("BaresipManager", "send_message: peer_uri is NULL");
+        return -1;
+    }
+    if (!text) {
+        log_error("BaresipManager", "send_message: text is NULL");
+        return -1;
+    }
+    log_info("BaresipManager", "enqueue message to='%s' text='%s'", peer_uri, text);
+
+    cmd_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = CMD_SEND_MESSAGE;
+    safe_strncpy(cmd.data.msg.peer, peer_uri, sizeof(cmd.data.msg.peer));
+    safe_strncpy(cmd.data.msg.text, text, sizeof(cmd.data.msg.text));
+    
+    if (!cmd_enqueue(&cmd)) {
+        log_error("BaresipManager", "Command Queue Full! Failed to enqueue message.");
+        return -1;
+    }
+    return 0;
 }

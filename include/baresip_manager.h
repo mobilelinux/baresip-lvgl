@@ -13,7 +13,8 @@ typedef enum {
   REG_STATUS_NONE = 0,
   REG_STATUS_REGISTERING,
   REG_STATUS_REGISTERED,
-  REG_STATUS_FAILED
+  REG_STATUS_FAILED,
+  REG_STATUS_AUTH_FAILED
 } reg_status_t;
 
 typedef void (*call_event_cb)(enum call_state state, const char *peer_uri,

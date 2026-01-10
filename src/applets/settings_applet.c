@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
+#include "../ui/ui_helpers.h"
 
 // Settings applet data
 typedef struct {
@@ -54,8 +56,12 @@ typedef struct {
   lv_obj_t *form_auth_user_ta;
   lv_obj_t *form_proxy2_ta;
   lv_obj_t *form_reg_int_ta;
+  // Duplicate removed
   lv_obj_t *form_media_enc_dd;
-  lv_obj_t *form_media_nat_dd;
+  // lv_obj_t *form_media_nat_dd; // Replaced
+  lv_obj_t *form_transport_dd;
+  lv_obj_t *form_ice_sw;
+  lv_obj_t *form_stun_ta;
 
   // Codec Priority Widgets
   lv_obj_t *codec_priority_screen;
@@ -67,6 +73,9 @@ typedef struct {
   lv_obj_t *form_ans_dd;
   lv_obj_t *form_vm_ta;
   lv_obj_t *form_country_ta;
+  
+  // State
+  bool is_deep_linked;
 } settings_data_t;
 
 // Forward declarations
@@ -95,25 +104,6 @@ static enum {
   SETTINGS_SCREEN_CALL
 } target_screen = SETTINGS_SCREEN_MAIN;
 
-// Helper: Check if codec is in the comma-separated list
-static bool is_codec_enabled(const char *list, const char *codec) {
-  if (!list || !codec)
-    return false;
-  char *dup = strdup(list);
-  char *saveptr;
-  char *tok = strtok_r(dup, ",", &saveptr);
-  bool found = false;
-  while (tok) {
-    if (strcmp(tok, codec) == 0) {
-      found = true;
-      break;
-    }
-    tok = strtok_r(NULL, ",", &saveptr);
-  }
-  free(dup);
-  return found;
-}
-
 // Forward decl
 static void show_codec_priority_screen(settings_data_t *data, bool is_audio);
 static void show_account_form(settings_data_t *data);
@@ -134,38 +124,45 @@ static void sanitize_input(char *str) {
   }
 }
 
+static void handle_swipe_back(lv_event_t *e) {
+    (void)e;
+    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+    if (dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) {
+        log_info("SettingsApplet", "Swipe detected (Dir: %d), going back", dir);
+        applet_manager_back();
+    }
+}
+
 // Event handler for back button
-static void back_btn_clicked(lv_event_t *e) { applet_manager_back(); }
+static void back_btn_clicked(lv_event_t *e) { (void)e; applet_manager_back(); }
 
-static void back_to_main(lv_event_t *e) {
-  applet_t *applet = applet_manager_get_current();
-  settings_data_t *data = (settings_data_t *)applet->user_data;
-
-  if (nav_source == NAV_SOURCE_DEEP_LINK) {
-    // Consume the deep link state and go back to previous applet
-    target_screen = SETTINGS_SCREEN_MAIN;
-    nav_source = NAV_SOURCE_MAIN;
-    show_main_screen(data); // Reset UI to main so next entry is clean
-    applet_manager_back();
-  } else {
-    // Normal navigation within Settings
-    show_main_screen(data);
-  }
-}
-
-// Event handler for settings items
-static void setting_item_clicked(lv_event_t *e) {
-  const char *text = lv_event_get_user_data(e);
-  log_info("SettingsApplet", "Clicked: %s", text);
-}
+/* Orphaned Block Removed */
 
 static void call_settings_clicked(lv_event_t *e) {
+  (void)e;
   applet_t *applet = applet_manager_get_current();
   settings_data_t *data = (settings_data_t *)applet->user_data;
   show_call_settings(data);
+  show_call_settings(data);
+}
+
+static void back_to_main(lv_event_t *e) {
+  (void)e;
+  applet_t *applet = applet_manager_get_current();
+  settings_data_t *data = (settings_data_t *)applet->user_data;
+
+  if (data->is_deep_linked) {
+      // If deep linked, 'Back' means returning to the calling applet (e.g. Dialer)
+      applet_manager_back();
+      // We don't need to reset is_deep_linked here because next launch/resume will reset it based on global flags
+  } else {
+      // Normal navigation within Settings
+      show_main_screen(data);
+  }
 }
 
 static void add_account_btn_clicked(lv_event_t *e) {
+  (void)e;
   applet_t *applet = applet_manager_get_current();
   settings_data_t *data = (settings_data_t *)applet->user_data;
   init_account_edit(data, -1);
@@ -221,6 +218,7 @@ static void delete_account_clicked(lv_event_t *e) {
 }
 
 static void save_account_clicked(lv_event_t *e) {
+  (void)e;
   applet_t *applet = applet_manager_get_current();
   settings_data_t *data = (settings_data_t *)applet->user_data;
 
@@ -256,9 +254,7 @@ static void save_account_clicked(lv_event_t *e) {
   sanitize_input(acc->outbound_proxy);
 
   // Extended fields
-  strncpy(acc->nickname, lv_textarea_get_text(data->form_nick_ta),
-          sizeof(acc->nickname) - 1);
-  sanitize_input(acc->nickname);
+
 
   strncpy(acc->auth_user, lv_textarea_get_text(data->form_auth_user_ta),
           sizeof(acc->auth_user) - 1);
@@ -272,8 +268,17 @@ static void save_account_clicked(lv_event_t *e) {
 
   lv_dropdown_get_selected_str(data->form_media_enc_dd, acc->media_enc,
                                sizeof(acc->media_enc));
-  lv_dropdown_get_selected_str(data->form_media_nat_dd, acc->media_nat,
-                               sizeof(acc->media_nat));
+  lv_dropdown_get_selected_str(data->form_media_enc_dd, acc->media_enc,
+                               sizeof(acc->media_enc));
+  
+  lv_dropdown_get_selected_str(data->form_transport_dd, acc->transport,
+                               sizeof(acc->transport));
+  
+  acc->use_ice = lv_obj_has_state(data->form_ice_sw, LV_STATE_CHECKED);
+
+  strncpy(acc->stun_server, lv_textarea_get_text(data->form_stun_ta),
+          sizeof(acc->stun_server) - 1);
+  sanitize_input(acc->stun_server);
   lv_dropdown_get_selected_str(data->form_dtmf_dd, acc->dtmf_mode,
                                sizeof(acc->dtmf_mode));
   lv_dropdown_get_selected_str(data->form_ans_dd, acc->answer_mode,
@@ -298,18 +303,6 @@ static void save_account_clicked(lv_event_t *e) {
   show_account_settings(data);
   log_info("SettingsApplet", "Account saved: %s@%s", acc->username,
            acc->server);
-}
-
-static void codec_changed(lv_event_t *e) {
-  applet_t *applet = applet_manager_get_current();
-  settings_data_t *data = (settings_data_t *)applet->user_data;
-  lv_obj_t *dropdown = lv_event_get_target(e);
-
-  data->config.preferred_codec = lv_dropdown_get_selected(dropdown);
-  save_settings(data);
-
-  log_debug("SettingsApplet", "Codec changed to: %s",
-            config_get_codec_name(data->config.preferred_codec));
 }
 
 static void default_account_changed(lv_event_t *e) {
@@ -398,6 +391,7 @@ static void refresh_account_list(settings_data_t *data) {
 
     lv_obj_t *item = lv_obj_create(data->account_list);
     lv_obj_set_size(item, LV_PCT(100), 70);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(item, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -474,6 +468,7 @@ static lv_obj_t *create_switch_row(lv_obj_t *parent, const char *label_text,
                                    bool checked) {
   lv_obj_t *row = lv_obj_create(parent);
   lv_obj_set_size(row, LV_PCT(100), 50);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
@@ -488,21 +483,7 @@ static lv_obj_t *create_switch_row(lv_obj_t *parent, const char *label_text,
   lv_obj_t *sw = lv_switch_create(row);
   if (checked)
     lv_obj_add_state(sw, LV_STATE_CHECKED);
-
   return sw;
-}
-
-// UI Helper: Create a row with a text area
-static lv_obj_t *create_text_row(lv_obj_t *parent, const char *placeholder,
-                                 const char *value) {
-  lv_obj_t *ta = lv_textarea_create(parent);
-  lv_obj_set_width(ta, LV_PCT(100));
-  lv_textarea_set_one_line(ta, true);
-  lv_textarea_set_placeholder_text(ta, placeholder);
-  if (value)
-    lv_textarea_set_text(ta, value);
-  // Margin removed, handled by parent spacing
-  return ta;
 }
 
 // UI Helper: Create a row with a label and a dropdown
@@ -510,6 +491,7 @@ static lv_obj_t *create_dropdown_row(lv_obj_t *parent, const char *label_text,
                                      const char *options, int selected) {
   lv_obj_t *row = lv_obj_create(parent);
   lv_obj_set_size(row, LV_PCT(100), 50);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
@@ -598,24 +580,10 @@ static void show_codec_priority_screen(settings_data_t *data, bool is_audio) {
   lv_obj_clean(data->codec_priority_screen);
 
   // Header
-  lv_obj_t *header = lv_obj_create(data->codec_priority_screen);
-  lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  lv_obj_t *back = lv_btn_create(header);
-  lv_obj_set_size(back, 50, 40);
-  lv_label_set_text(lv_label_create(back), LV_SYMBOL_LEFT);
-  lv_obj_add_event_cb(back, codec_back_clicked, LV_EVENT_CLICKED, data);
-
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, is_audio ? "Audio Codecs" : "Video Codecs");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_16,
-                             0); // Reduced font size to fit
-
-  lv_obj_t *dummy = lv_obj_create(header); // Spacer
+  lv_obj_t *header = ui_create_title_bar(data->codec_priority_screen, 
+                                        is_audio ? "Audio Codecs" : "Video Codecs", 
+                                        true, codec_back_clicked, data);
+  lv_obj_t *dummy = lv_obj_create(header); // Spacer replaced by auto-layout or ignored
   lv_obj_set_size(dummy, 50, 40);
   lv_obj_set_style_bg_opa(dummy, 0, 0);
   lv_obj_set_style_border_width(dummy, 0, 0);
@@ -713,8 +681,7 @@ static void show_codec_priority_screen(settings_data_t *data, bool is_audio) {
 static void capture_form_data(settings_data_t *data) {
   voip_account_t *acc = &data->temp_account;
 
-  strncpy(acc->nickname, lv_textarea_get_text(data->form_nick_ta),
-          sizeof(acc->nickname) - 1);
+
   strncpy(acc->display_name, lv_textarea_get_text(data->form_name_ta),
           sizeof(acc->display_name) - 1);
   strncpy(acc->auth_user, lv_textarea_get_text(data->form_auth_user_ta),
@@ -742,22 +709,30 @@ static void capture_form_data(settings_data_t *data) {
   // Note: Dropdowns logic for capture
   char buf[64];
   lv_dropdown_get_selected_str(data->form_media_enc_dd, buf, sizeof(buf));
-  strncpy(acc->media_enc, buf, sizeof(acc->media_enc) - 1);
+  snprintf(acc->media_enc, sizeof(acc->media_enc), "%.*s", (int)sizeof(acc->media_enc)-1, buf);
 
-  lv_dropdown_get_selected_str(data->form_media_nat_dd, buf, sizeof(buf));
-  strncpy(acc->media_nat, buf, sizeof(acc->media_nat) - 1);
+  lv_dropdown_get_selected_str(data->form_media_enc_dd, buf, sizeof(buf));
+  snprintf(acc->media_enc, sizeof(acc->media_enc), "%.*s", (int)sizeof(acc->media_enc)-1, buf);
+
+  lv_dropdown_get_selected_str(data->form_transport_dd, buf, sizeof(buf));
+  // Convert to lowercase just in case
+  for(int i=0; buf[i]; i++) buf[i] = tolower(buf[i]);
+  snprintf(acc->transport, sizeof(acc->transport), "%.*s", (int)sizeof(acc->transport)-1, buf);
+
+  acc->use_ice = lv_obj_has_state(data->form_ice_sw, LV_STATE_CHECKED);
+
+  snprintf(acc->stun_server, sizeof(acc->stun_server), "%.*s", (int)sizeof(acc->stun_server)-1, lv_textarea_get_text(data->form_stun_ta));
 
   acc->rtcp_mux = lv_obj_has_state(data->form_rtcp_mux_sw, LV_STATE_CHECKED);
   acc->prack = lv_obj_has_state(data->form_prack_sw, LV_STATE_CHECKED);
 
   lv_dropdown_get_selected_str(data->form_dtmf_dd, buf, sizeof(buf));
-  strncpy(acc->dtmf_mode, buf, sizeof(acc->dtmf_mode) - 1);
+  snprintf(acc->dtmf_mode, sizeof(acc->dtmf_mode), "%.*s", (int)sizeof(acc->dtmf_mode)-1, buf);
 
   lv_dropdown_get_selected_str(data->form_ans_dd, buf, sizeof(buf));
-  strncpy(acc->answer_mode, buf, sizeof(acc->answer_mode) - 1);
+  snprintf(acc->answer_mode, sizeof(acc->answer_mode), "%.*s", (int)sizeof(acc->answer_mode)-1, buf);
 
-  strncpy(acc->vm_uri, lv_textarea_get_text(data->form_vm_ta),
-          sizeof(acc->vm_uri) - 1);
+  snprintf(acc->vm_uri, sizeof(acc->vm_uri), "%.*s", (int)sizeof(acc->vm_uri)-1, lv_textarea_get_text(data->form_vm_ta));
 }
 
 static void open_audio_codecs_clicked(lv_event_t *e) {
@@ -773,6 +748,7 @@ static void open_video_codecs_clicked(lv_event_t *e) {
 }
 
 static void account_settings_clicked(lv_event_t *e) {
+  (void)e;
   applet_t *applet = applet_manager_get_current();
   settings_data_t *data = (settings_data_t *)applet->user_data;
   show_account_settings(data);
@@ -787,32 +763,9 @@ static void show_call_settings(settings_data_t *data) {
   lv_obj_clean(data->call_settings_screen);
 
   // Header
-  lv_obj_t *header = lv_obj_create(data->call_settings_screen);
-  lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  lv_obj_t *back_btn = lv_btn_create(header);
-  lv_obj_set_size(back_btn, 50, 40);
-  lv_obj_t *back_label = lv_label_create(back_btn);
-  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(back_label);
-  lv_obj_add_event_cb(back_btn, back_to_main, LV_EVENT_CLICKED, data);
-
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "System Settings");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-
-  lv_obj_t *save_btn = lv_btn_create(header);
-  lv_obj_set_size(save_btn, 50, 40);
-  lv_obj_t *save_label = lv_label_create(save_btn);
-  lv_label_set_text(save_label, LV_SYMBOL_OK);
-  lv_obj_center(save_label);
-  lv_obj_add_event_cb(save_btn, save_settings_clicked, LV_EVENT_CLICKED, data);
+  // Header
+  lv_obj_t *header = ui_create_title_bar(data->call_settings_screen, "System Settings", true, back_to_main, data);
+  ui_header_add_action_btn(header, LV_SYMBOL_OK, save_settings_clicked, data);
 
   // Content Container (Scrollable)
   lv_obj_t *content = lv_obj_create(data->call_settings_screen);
@@ -882,16 +835,14 @@ static void save_call_settings(settings_data_t *data) {
     strcpy(validated_addr, "0.0.0.0:5060");
   }
   validated_addr[sizeof(validated_addr) - 1] = '\0';
-  strncpy(data->config.listen_address, validated_addr,
-          sizeof(data->config.listen_address) - 1);
+  snprintf(data->config.listen_address, sizeof(data->config.listen_address), "%.*s", (int)sizeof(data->config.listen_address)-1, validated_addr);
 
   int fam_idx = lv_dropdown_get_selected(data->call_addr_fam_dd);
   data->config.address_family =
       (fam_idx == 0) ? 1 : 2; // 0->IPv4(1), 1->IPv6(2)
 
   // Basic DNS validation (ensure not empty / comma format check if needed)
-  strncpy(data->config.dns_servers, lv_textarea_get_text(data->call_dns_ta),
-          sizeof(data->config.dns_servers) - 1);
+  snprintf(data->config.dns_servers, sizeof(data->config.dns_servers), "%.*s", (int)sizeof(data->config.dns_servers)-1, lv_textarea_get_text(data->call_dns_ta));
 
   data->config.video_frame_size =
       lv_dropdown_get_selected(data->call_video_size_dd);
@@ -923,6 +874,9 @@ static void init_account_edit(settings_data_t *data, int index) {
     strcpy(data->temp_account.audio_codecs,
            "opus/48000/2,PCMU/8000/1,PCMA/8000/1,G722/16000/1");
     strcpy(data->temp_account.video_codecs, "H264");
+    strcpy(data->temp_account.transport, "udp");
+    data->temp_account.use_ice = false;
+    data->temp_account.enabled = true; // Default to enabled
   }
 }
 
@@ -969,7 +923,7 @@ static void show_account_form(settings_data_t *data) {
       lv_textarea_set_placeholder_text(ta_ptr, placeholder);                   \
   } while (0)
 
-  ADD_TA("Nickname", data->form_nick_ta, "My Account");
+  ADD_TA("SIP Username", data->form_user_ta, "user123");
   ADD_TA("Display Name", data->form_name_ta, "John Doe");
   ADD_TA("Authentication Username", data->form_auth_user_ta, "user123");
 
@@ -977,7 +931,6 @@ static void show_account_form(settings_data_t *data) {
   lv_textarea_set_password_mode(data->form_pass_ta, true);
 
   ADD_TA("SIP Domain (Server)", data->form_server_ta, "sip.example.com");
-  ADD_TA("SIP Username", data->form_user_ta, "user123");
   ADD_TA("Port", data->form_port_ta, "5060");
 
   lv_label_create(content);
@@ -991,6 +944,7 @@ static void show_account_form(settings_data_t *data) {
   // Register Switch
   lv_obj_t *reg_cont = lv_obj_create(content);
   lv_obj_set_size(reg_cont, LV_PCT(95), 50);
+  lv_obj_clear_flag(reg_cont, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(reg_cont, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(reg_cont, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1007,14 +961,28 @@ static void show_account_form(settings_data_t *data) {
   lv_obj_set_width(data->form_media_enc_dd, LV_PCT(95));
 
   lv_label_create(content);
-  lv_label_set_text(lv_obj_get_child(content, -1), "Media NAT Traversal");
-  data->form_media_nat_dd = lv_dropdown_create(content);
-  lv_dropdown_set_options(data->form_media_nat_dd, "ice\nstun\nturn\nnone");
-  lv_obj_set_width(data->form_media_nat_dd, LV_PCT(95));
+  lv_label_set_text(lv_obj_get_child(content, -1), "Transport Protocol");
+  data->form_transport_dd = lv_dropdown_create(content);
+  lv_dropdown_set_options(data->form_transport_dd, "UDP\nTCP\nTLS");
+  lv_obj_set_width(data->form_transport_dd, LV_PCT(95));
+
+  // ICE Switch
+  lv_obj_t *ice_cont = lv_obj_create(content);
+  lv_obj_set_size(ice_cont, LV_PCT(95), 50);
+  lv_obj_clear_flag(ice_cont, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(ice_cont, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(ice_cont, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lbl = lv_label_create(ice_cont);
+  lv_label_set_text(lbl, "Use ICE");
+  data->form_ice_sw = lv_switch_create(ice_cont);
+
+  ADD_TA("STUN/TURN Server (Optional)", data->form_stun_ta, "stun.fs.com:3478");
 
   // RTCP Mux
   lv_obj_t *rtcp_cont = lv_obj_create(content);
   lv_obj_set_size(rtcp_cont, LV_PCT(95), 50);
+  lv_obj_clear_flag(rtcp_cont, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(rtcp_cont, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(rtcp_cont, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1025,6 +993,7 @@ static void show_account_form(settings_data_t *data) {
   // Prack
   lv_obj_t *prack_cont = lv_obj_create(content);
   lv_obj_set_size(prack_cont, LV_PCT(95), 50);
+  lv_obj_clear_flag(prack_cont, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_flex_flow(prack_cont, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(prack_cont, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1068,7 +1037,7 @@ static void show_account_form(settings_data_t *data) {
                       data);
 
   // Pre-populate logic (Always from temp_account)
-  lv_textarea_set_text(data->form_nick_ta, acc->nickname);
+
   lv_textarea_set_text(data->form_name_ta, acc->display_name);
   lv_textarea_set_text(data->form_auth_user_ta, acc->auth_user);
   lv_textarea_set_text(data->form_pass_ta, acc->password);
@@ -1084,6 +1053,16 @@ static void show_account_form(settings_data_t *data) {
 
   snprintf(pbuf, sizeof(pbuf), "%d", acc->reg_interval);
   lv_textarea_set_text(data->form_reg_int_ta, pbuf);
+  
+  // Set Transport Selection (Case insensitive match or default to 0)
+  if (strcasecmp(acc->transport, "tcp") == 0) lv_dropdown_set_selected(data->form_transport_dd, 1);
+  else if (strcasecmp(acc->transport, "tls") == 0) lv_dropdown_set_selected(data->form_transport_dd, 2);
+  else lv_dropdown_set_selected(data->form_transport_dd, 0); // UDP
+
+  if (acc->use_ice) lv_obj_add_state(data->form_ice_sw, LV_STATE_CHECKED);
+  else lv_obj_clear_state(data->form_ice_sw, LV_STATE_CHECKED);
+
+  lv_textarea_set_text(data->form_stun_ta, acc->stun_server);
 }
 
 static int settings_init(applet_t *applet) {
@@ -1098,18 +1077,38 @@ static int settings_init(applet_t *applet) {
   load_settings(data);
 
   // Create Screens
+  lv_obj_add_event_cb(applet->screen, handle_swipe_back, LV_EVENT_GESTURE, NULL);
   data->main_screen = lv_obj_create(applet->screen);
   data->account_settings_screen = lv_obj_create(applet->screen);
   data->call_settings_screen = lv_obj_create(applet->screen);
   data->account_form_screen = lv_obj_create(applet->screen);
 
   lv_obj_set_size(data->main_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_pad_all(data->main_screen, 0, 0);
+  lv_obj_set_style_border_width(data->main_screen, 0, 0);
+  lv_obj_set_style_radius(data->main_screen, 0, 0);
+
   lv_obj_set_size(data->account_settings_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_pad_all(data->account_settings_screen, 0, 0);
+  lv_obj_set_style_border_width(data->account_settings_screen, 0, 0);
+  lv_obj_set_style_radius(data->account_settings_screen, 0, 0);
+
   lv_obj_set_size(data->call_settings_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_pad_all(data->call_settings_screen, 0, 0);
+  lv_obj_set_style_border_width(data->call_settings_screen, 0, 0);
+  lv_obj_set_style_radius(data->call_settings_screen, 0, 0);
+
   lv_obj_set_size(data->account_form_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_pad_all(data->account_form_screen, 0, 0);
+  lv_obj_set_style_border_width(data->account_form_screen, 0, 0);
+  lv_obj_set_style_radius(data->account_form_screen, 0, 0);
 
   data->codec_priority_screen = lv_obj_create(applet->screen);
   lv_obj_set_size(data->codec_priority_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_pad_all(data->codec_priority_screen, 0, 0);
+  lv_obj_set_style_border_width(data->codec_priority_screen, 0, 0);
+  lv_obj_set_style_radius(data->codec_priority_screen, 0, 0);
+  lv_obj_add_flag(data->codec_priority_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
   lv_obj_add_flag(data->codec_priority_screen, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_add_flag(data->account_settings_screen, LV_OBJ_FLAG_HIDDEN);
@@ -1117,30 +1116,17 @@ static int settings_init(applet_t *applet) {
   lv_obj_add_flag(data->account_form_screen, LV_OBJ_FLAG_HIDDEN);
 
   // --- MAIN SCREEN ---
-  lv_obj_t *header = lv_obj_create(data->main_screen);
-  lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_add_flag(data->main_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->account_settings_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->call_settings_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->account_form_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-  lv_obj_t *back_btn = lv_btn_create(header);
-  lv_obj_set_size(back_btn, 50, 40);
-  lv_obj_t *back_label = lv_label_create(back_btn);
-  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(back_label);
-  lv_obj_add_event_cb(back_btn, back_btn_clicked, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "Settings");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_pad_left(title, 20, 0);
+  ui_create_title_bar(data->main_screen, "Settings", true, back_btn_clicked, NULL);
 
   lv_obj_t *main_list = lv_list_create(data->main_screen);
   lv_obj_set_size(main_list, LV_PCT(90), LV_PCT(80));
   lv_obj_align(main_list, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_add_flag(main_list, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
   lv_obj_t *btn_call =
       lv_list_add_btn(main_list, LV_SYMBOL_SETTINGS, "System Settings");
@@ -1152,34 +1138,9 @@ static int settings_init(applet_t *applet) {
                       NULL);
 
   // --- ACCOUNT SETTINGS SCREEN (ACCOUNTS LIST) ---
-  lv_obj_t *call_header = lv_obj_create(data->account_settings_screen);
-  lv_obj_set_size(call_header, LV_PCT(100), 60);
-  lv_obj_set_scrollbar_mode(call_header, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_clear_flag(call_header, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(call_header, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_flex_flow(call_header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(call_header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  lv_obj_t *call_back_btn = lv_btn_create(call_header);
-  lv_obj_set_size(call_back_btn, 50, 40);
-  lv_obj_t *call_back_label = lv_label_create(call_back_btn);
-  lv_label_set_text(call_back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(call_back_label);
-  lv_obj_add_event_cb(call_back_btn, back_to_main, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *call_title = lv_label_create(call_header);
-  lv_label_set_text(call_title, "Account Settings");
-  lv_obj_set_style_text_font(call_title, &lv_font_montserrat_24, 0);
-
-  lv_obj_t *call_add_btn = lv_btn_create(call_header);
-  lv_obj_set_size(call_add_btn, 80, 40);
-  lv_obj_set_style_bg_color(call_add_btn, lv_color_hex(0x00AA00), 0);
-  lv_obj_t *add_label = lv_label_create(call_add_btn);
-  lv_label_set_text(add_label, LV_SYMBOL_PLUS " Add");
-  lv_obj_center(add_label);
-  lv_obj_add_event_cb(call_add_btn, add_account_btn_clicked, LV_EVENT_CLICKED,
-                      NULL);
+  // --- ACCOUNT SETTINGS SCREEN (ACCOUNTS LIST) ---
+  lv_obj_t *call_header = ui_create_title_bar(data->account_settings_screen, "Account Settings", true, back_to_main, NULL);
+  ui_header_add_action_btn(call_header, LV_SYMBOL_PLUS, add_account_btn_clicked, NULL);
 
   lv_obj_t *call_content = lv_obj_create(data->account_settings_screen);
   lv_obj_set_size(call_content, LV_PCT(95), LV_PCT(80));
@@ -1206,46 +1167,12 @@ static int settings_init(applet_t *applet) {
   lv_obj_set_flex_flow(data->account_list, LV_FLEX_FLOW_COLUMN);
 
   // --- ACCOUNT FORM SCREEN ---
-  lv_obj_t *form_header = lv_obj_create(data->account_form_screen);
-  lv_obj_set_size(form_header, LV_PCT(100), 60);
-  lv_obj_set_scrollbar_mode(form_header, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_clear_flag(form_header, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(form_header, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_flex_flow(form_header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(form_header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-
-  // Back Button
-  lv_obj_t *form_back_btn = lv_btn_create(form_header);
-  lv_obj_set_size(form_back_btn, 50, 40);
-  lv_obj_t *form_back_label = lv_label_create(form_back_btn);
-  lv_label_set_text(form_back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(form_back_label);
-  lv_obj_add_event_cb(form_back_btn, account_settings_clicked, LV_EVENT_CLICKED,
-                      NULL);
-
-  // Title
-  lv_obj_t *form_title = lv_label_create(form_header);
-  lv_label_set_text(form_title, "Account");
-  lv_obj_set_style_text_font(form_title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_pad_left(form_title, 10, 0);
-
-  // Spacer
-  lv_obj_t *spacer = lv_obj_create(form_header);
-  lv_obj_set_flex_grow(spacer, 1);
-  lv_obj_set_height(spacer, 0); // Invisible
-  lv_obj_set_style_bg_opa(spacer, 0, 0);
-  lv_obj_set_style_border_width(spacer, 0, 0);
-
-  // Save Button (Header)
-  lv_obj_t *form_save_btn = lv_btn_create(form_header);
-  lv_obj_set_size(form_save_btn, 50, 40);
-  lv_obj_set_style_bg_color(form_save_btn, lv_color_hex(0x00AA00), 0);
-  lv_obj_t *form_save_icon = lv_label_create(form_save_btn);
-  lv_label_set_text(form_save_icon, LV_SYMBOL_SAVE); // Save Icon
-  lv_obj_center(form_save_icon);
-  lv_obj_add_event_cb(form_save_btn, save_account_clicked, LV_EVENT_CLICKED,
-                      NULL);
+  lv_obj_t *form_header = ui_create_title_bar(data->account_form_screen, "Account", true, account_settings_clicked, NULL);
+  // Note: ORIGINAL used form_save_btn (green). Helper makes transparent.
+  // We'll stick to helper for consistency, or we could set style on the returned button?
+  // User asked for "common widget". Common implies same style.
+  // So we accept the transparent/white icon style.
+  ui_header_add_action_btn(form_header, LV_SYMBOL_SAVE, save_account_clicked, NULL);
 
   data->account_form_content = lv_obj_create(data->account_form_screen);
   lv_obj_set_size(data->account_form_content, LV_PCT(95), LV_PCT(80));
@@ -1267,39 +1194,42 @@ void settings_open_call_settings(void) {
   nav_source = NAV_SOURCE_DEEP_LINK;
 }
 
+static void apply_launch_request(settings_data_t *data) {
+    if (nav_source == NAV_SOURCE_DEEP_LINK) {
+        data->is_deep_linked = true;
+        if (target_screen == SETTINGS_SCREEN_ACCOUNTS) show_account_settings(data);
+        else if (target_screen == SETTINGS_SCREEN_CALL) show_call_settings(data);
+        else show_main_screen(data);
+        
+        // consume the request
+        nav_source = NAV_SOURCE_MAIN;
+        target_screen = SETTINGS_SCREEN_MAIN;
+    } else {
+        // Normal Launch or Resume -> Force Main Screen
+        data->is_deep_linked = false;
+        show_main_screen(data);
+    }
+}
+
 static void settings_start(applet_t *applet) {
   log_info("SettingsApplet", "Started");
   settings_data_t *data = (settings_data_t *)applet->user_data;
-
-  if (target_screen == SETTINGS_SCREEN_ACCOUNTS) {
-    show_account_settings(data);
-  } else if (target_screen == SETTINGS_SCREEN_CALL) {
-    show_call_settings(data);
-  } else {
-    show_main_screen(data);
-    nav_source = NAV_SOURCE_MAIN; // Reset if starting at main
-  }
+  apply_launch_request(data);
 }
 
 static void settings_pause(applet_t *applet) {
+  (void)applet;
   log_info("SettingsApplet", "Paused");
 }
 
 static void settings_resume(applet_t *applet) {
   log_info("SettingsApplet", "Resumed");
   settings_data_t *data = (settings_data_t *)applet->user_data;
-
-  // Handle Deep Links on Resume
-  if (target_screen == SETTINGS_SCREEN_ACCOUNTS) {
-    show_account_settings(data);
-  } else if (target_screen == SETTINGS_SCREEN_CALL) {
-    show_call_settings(data);
-  } else {
-    refresh_account_list(data);
-  }
+  apply_launch_request(data);
 }
 
 static void settings_stop(applet_t *applet) {
+  (void)applet;
   log_info("SettingsApplet", "Stopped");
 }
 

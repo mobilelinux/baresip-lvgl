@@ -4,14 +4,24 @@
 #include "call_applet.h"
 #include "config_manager.h"
 #include "history_manager.h"
+#include "database_manager.h"
 #include "logger.h"
 #include <stdio.h>
 #include <string.h>
+#include "../ui/ui_helpers.h"
 
 // Picker State
 static char g_pending_number[128] = {0};
 static bool g_pending_is_video = false;
 static lv_obj_t *g_account_picker_modal = NULL;
+static lv_obj_t *g_detail_screen = NULL;
+
+// Helpers
+static void create_avatar(lv_obj_t *parent, const char *text, int size, int font_size);
+static void get_date_header(long timestamp, char *buf, size_t size);
+static void show_detail_screen(const char *number, const char *name);
+static void hide_detail_screen(void);
+
 
 static void close_picker_modal(void);
 static void show_account_picker(const char *number, bool is_video);
@@ -26,13 +36,24 @@ extern void contacts_applet_open_new(const char *number);
 extern applet_t contacts_applet; // Need to launch it
 
 // Context Menu State
-// Context Menu State
+extern void chat_applet_open_peer(const char *peer);
+extern applet_t chat_applet;
 static lv_obj_t *g_context_menu_modal = NULL;
 static call_log_entry_t g_context_menu_entry;
 static int g_context_menu_index = -1;
 static bool g_long_press_handled = false;
 static void show_call_log_context_menu(const call_log_entry_t *entry,
                                        int index);
+
+// Filter & Selection State
+static bool g_filter_missed_only = false;
+static bool g_selection_mode = false;
+static bool g_selected_items[100]; // Matches MAX_HISTORY behavior
+static lv_obj_t *g_mode_btn = NULL; // Trash/Delete button
+static lv_obj_t *g_filter_btn_all = NULL;
+static lv_obj_t *g_filter_btn_missed = NULL;
+
+extern void history_delete_mask(const bool *selection, int count);
 
 // Picker Implementation
 static void close_picker_modal(void) {
@@ -70,7 +91,7 @@ static void show_account_picker(const char *number, bool is_video) {
   if (g_account_picker_modal)
     return; // Already open
 
-  strncpy(g_pending_number, number, sizeof(g_pending_number) - 1);
+  snprintf(g_pending_number, sizeof(g_pending_number), "%s", number);
   g_pending_is_video = is_video;
 
   g_account_picker_modal = lv_obj_create(lv_scr_act());
@@ -167,6 +188,7 @@ static void context_menu_add_contact(lv_event_t *e) {
 }
 
 static void context_menu_call_action(lv_event_t *e) {
+  (void)e;
   close_context_menu();
 
   char number_buf[128];
@@ -354,7 +376,9 @@ static void show_call_log_context_menu(const call_log_entry_t *entry,
 
   // Menu Items
   // Call
-  create_menu_btn(menu, LV_SYMBOL_CALL, "Call", false,
+  create_menu_btn(menu, LV_SYMBOL_CALL, "Audio Call", false,
+                  context_menu_call_action);
+  create_menu_btn(menu, LV_SYMBOL_VIDEO, "Video Call", false,
                   context_menu_call_action);
   // placeholder for Call action?
   // Wait, "Call" should probably call? I should split context_menu_add_contact
@@ -401,144 +425,10 @@ static void log_long_press_handler(lv_event_t *e) {
 }
 
 // Event handler for call back button
-static void call_back_clicked(lv_event_t *e) {
-  if (g_long_press_handled) {
-    g_long_press_handled = false;
-    return;
-  }
-  const call_log_entry_t *entry =
-      (const call_log_entry_t *)lv_event_get_user_data(e);
-  if (entry) {
-    // Make a local copy of data to ensure memory safety
-    char name_buf[64];
-    char number_buf[128];
-
-    // Use snprintf for safe copying with null termination
-    snprintf(name_buf, sizeof(name_buf), "%s", entry->name);
-    snprintf(number_buf, sizeof(number_buf), "%s", entry->number);
-
-    log_info("CallLogApplet", "Calling back %s at %s", name_buf, number_buf);
-
-    if (strlen(number_buf) > 0) {
-      int ret = -1;
-      if (strlen(entry->account_aor) > 0) {
-        log_info("CallLogApplet", "Calling back using stored account: %s",
-                 entry->account_aor);
-        ret = baresip_manager_call_with_account(number_buf, entry->account_aor);
-      } else {
-        // No stored account, check default config
-        app_config_t config;
-        config_load_app_settings(&config);
-
-        if (config.default_account_index >= 0) {
-          voip_account_t accounts[MAX_ACCOUNTS];
-          int count = config_load_accounts(accounts, MAX_ACCOUNTS);
-          if (config.default_account_index < count) {
-            // Use Default
-            char aor[256];
-            voip_account_t *acc = &accounts[config.default_account_index];
-            snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
-            ret = baresip_manager_call_with_account(number_buf, aor);
-          } else {
-            ret = baresip_manager_call(number_buf); // Fallback
-          }
-        } else {
-          // No default account, Show Picker
-          log_info("CallLogApplet", "No default account, showing picker");
-          show_account_picker(number_buf, false);
-          return;
-        }
-      }
-
-      if (ret == 0) {
-        // Switch to call applet if call initiated successfully
-        call_applet_request_active_view();
-        applet_manager_launch_applet(&call_applet);
-      }
-    } else {
-      log_warn("CallLogApplet", "Cannot call empty number");
-    }
-  }
-}
+/* Unused function removed */
 
 // Event handler for video call back button
-static void video_call_back_clicked(lv_event_t *e) {
-  if (g_long_press_handled) {
-    g_long_press_handled = false;
-    return;
-  }
-  const call_log_entry_t *entry =
-      (const call_log_entry_t *)lv_event_get_user_data(e);
-  if (entry) {
-    char number_buf[128];
-    snprintf(number_buf, sizeof(number_buf), "%s", entry->number);
-
-    log_info("CallLogApplet", "Video calling back %s", number_buf);
-
-    if (strlen(number_buf) > 0) {
-      int ret = -1;
-      if (strlen(entry->account_aor) > 0) {
-        ret = baresip_manager_videocall_with_account(number_buf,
-                                                     entry->account_aor);
-      } else {
-        // No stored account, check default
-        app_config_t config;
-        config_load_app_settings(&config);
-
-        if (config.default_account_index >= 0) {
-          voip_account_t accounts[MAX_ACCOUNTS];
-          int count = config_load_accounts(accounts, MAX_ACCOUNTS);
-          if (config.default_account_index < count) {
-            char aor[256];
-            voip_account_t *acc = &accounts[config.default_account_index];
-            snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
-            ret = baresip_manager_videocall_with_account(number_buf, aor);
-          } else {
-            ret = baresip_manager_videocall(number_buf);
-          }
-        } else {
-          // Picker
-          log_info("CallLogApplet",
-                   "No default account, showing picker for VIDEO");
-          show_account_picker(number_buf, true);
-          return;
-        }
-      }
-
-      if (ret == 0) {
-        call_applet_request_active_view();
-        applet_manager_launch_applet(&call_applet);
-      }
-    }
-  }
-}
-
-// Get call type icon and color
-static const char *get_call_icon(call_type_t type) {
-  switch (type) {
-  case CALL_TYPE_INCOMING:
-    return LV_SYMBOL_DOWNLOAD;
-  case CALL_TYPE_OUTGOING:
-    return LV_SYMBOL_UPLOAD;
-  case CALL_TYPE_MISSED:
-    return LV_SYMBOL_CLOSE;
-  default:
-    return LV_SYMBOL_CALL;
-  }
-}
-
-static lv_color_t get_call_color(call_type_t type) {
-  switch (type) {
-  case CALL_TYPE_INCOMING:
-    return lv_color_hex(0x00AA00);
-  case CALL_TYPE_OUTGOING:
-    return lv_color_hex(0x0088FF);
-  case CALL_TYPE_MISSED:
-    return lv_color_hex(0xFF0000);
-  default:
-    return lv_color_hex(0x808080);
-  }
-}
+/* Unused function removed */
 
 // Make applet pointer global so we can refresh
 static applet_t *g_log_applet = NULL;
@@ -546,165 +436,536 @@ static applet_t *g_log_applet = NULL;
 // Global list object
 static lv_obj_t *g_call_log_list = NULL;
 
+// --- Helpers ---
+static void get_date_header(long timestamp, char *buf, size_t size) {
+    time_t now = time(NULL);
+    struct tm *t_now = localtime(&now);
+    int day_curr = t_now->tm_yday;
+    int year_curr = t_now->tm_year;
+
+    struct tm *t_ts = localtime(&timestamp);
+    int day_ts = t_ts->tm_yday;
+    int year_ts = t_ts->tm_year;
+
+    if (year_curr == year_ts && day_curr == day_ts) {
+        snprintf(buf, size, "Today");
+    } else if (year_curr == year_ts && day_curr == day_ts + 1) {
+         snprintf(buf, size, "Yesterday");
+    } else {
+         strftime(buf, size, "%b %d %A", t_ts); // e.g. Jan 4 Sunday
+    }
+}
+
+static void create_avatar(lv_obj_t *parent, const char *text, int size, int font_size) {
+    lv_obj_t *avatar = lv_obj_create(parent);
+    lv_obj_set_size(avatar, size, size);
+    lv_obj_set_style_radius(avatar, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(avatar, lv_color_hex(0x333333), 0); // Dark Grey/Black
+    lv_obj_set_style_border_width(avatar, 0, 0);
+    lv_obj_clear_flag(avatar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(avatar, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *lbl = lv_label_create(avatar);
+    // Initials logic? Or just number?
+    // If text is number, just show it? if name, show initial?
+    // Image shows "8" for 808086. "9" for 99. "G" for George?
+    // Let's take first char.
+    char initial[4] = {0};
+    if (text && strlen(text) > 0) {
+        // Skip sip: if present (should be cleaned before passed)
+        initial[0] = text[0]; 
+    }
+    lv_label_set_text(lbl, initial);
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    if(font_size == 0) font_size = 24;
+    // Hacky font selection based on size
+    if (font_size >= 32) lv_obj_set_style_text_font(lbl, &lv_font_montserrat_32, 0);
+    else lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+    
+    lv_obj_center(lbl);
+}
+
+// --- Detail Screen ---
+static void detail_call_clicked(lv_event_t *e) {
+    const char *number = lv_event_get_user_data(e);
+    // Call Logic
+    if (number) {
+         baresip_manager_call(number); // Simplified for now, or use picker logic
+         call_applet_request_active_view();
+         applet_manager_launch_applet(&call_applet);
+    }
+}
+
+static void detail_msg_clicked(lv_event_t *e) {
+     const char *number = (const char *)lv_event_get_user_data(e);
+     if (number) {
+         log_info("CallLogApplet", "Opening Chat with %s", number);
+         chat_applet_open_peer(number);
+         applet_manager_launch_applet(&chat_applet);
+     }
+}
+
+static void hide_detail_screen(void) {
+    if (g_detail_screen) {
+        lv_obj_del(g_detail_screen);
+        g_detail_screen = NULL;
+    }
+}
+
+static void show_detail_screen(const char *number, const char *name) {
+    if (g_detail_screen) return;
+    
+    g_detail_screen = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(g_detail_screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(g_detail_screen, lv_color_white(), 0);
+    lv_obj_set_flex_flow(g_detail_screen, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(g_detail_screen, 0, 0);
+
+    // Header (Custom for Detail View to overlay main header)
+    // Header (Custom for Detail View to overlay main header)
+    lv_obj_t *header = ui_create_title_bar(g_detail_screen, 
+                                          (name && strlen(name)>0) ? name : number, 
+                                          true, (lv_event_cb_t)hide_detail_screen, NULL);
+    // Align? ui_create_title_bar aligns to top.
+    
+    // Note: ORIGINAL used custom alignment and radius. Common widget enforces standard.
+    // If we want "floating card" look for detail screen, we might need to override styles.
+    // But "common title bar" implies standard look. We stick to that.
+    
+    // We don't need to manually create back button or title.
+    // But we might need to hide the title passed to helper if we want custom title logic?
+    // The helper sets text. We passed the name/number.
+    
+    /* 
+    lv_obj_t *header = lv_obj_create(g_detail_screen);
+    ...
+    */
+    
+    // Fix: ui_create_title_bar creates the label. We can get it if we need to style it?
+    // For now, standard is fine. "name" or "number" is displayed.
+    
+    // Subtitle logic (URI) was in original...
+    // Original lines 542-550 created title.
+    // Lines 583-596 created subtitle in content area.
+    // So standard title is fine.
+
+    lv_obj_t *title_lbl = lv_label_create(header);
+    lv_label_set_text(title_lbl, (name && strlen(name)>0) ? name : number); // Show Name or Number
+    lv_obj_set_style_text_color(title_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_align(title_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(title_lbl, 200); // Limit width to avoid overlap
+    lv_obj_set_style_text_align(title_lbl, LV_TEXT_ALIGN_CENTER, 0);
+
+    // Content Container (Centered info)
+    lv_obj_t *info_cont = lv_obj_create(g_detail_screen);
+    lv_obj_set_size(info_cont, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(info_cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(info_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(info_cont, 0, 0);
+    lv_obj_set_style_border_width(info_cont, 0, 0);
+    lv_obj_set_style_pad_all(info_cont, 20, 0);
+    
+    // Clean URI for display
+    char clean_uri[128];
+    strncpy(clean_uri, number, sizeof(clean_uri)-1);
+    clean_uri[sizeof(clean_uri)-1] = '\0';
+    
+    // Strip params
+    char *p = strchr(clean_uri, ';');
+    if (p) *p = '\0';
+    
+    // Strip prefix
+    char *start = clean_uri;
+    if (strncmp(start, "sip:", 4) == 0) start += 4;
+    else if (strncmp(start, "sips:", 5) == 0) start += 5;
+
+    // Large Avatar
+    create_avatar(info_cont, (name && strlen(name)>0) ? name : start, 100, 48);
+    
+    // Number/Name
+    lv_obj_t *main_lbl = lv_label_create(info_cont);
+    lv_label_set_text(main_lbl, (name && strlen(name)>0) ? name : start);
+    lv_obj_set_style_text_font(main_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_pad_top(main_lbl, 10, 0);
+    
+    // SIP URI (Subtitle) - Only show if Name is present, otherwise redundant (or show full if needed?)
+    // User said: "show sip uri as username@domain".
+    // If name is present, Main=Name, Sub=URI.
+    // If name absent, Main=URI, Sub=Hidden?
+    lv_obj_t *sub_lbl = lv_label_create(info_cont);
+    lv_label_set_text(sub_lbl, start); 
+    if (name && strlen(name)>0) {
+        lv_obj_clear_flag(sub_lbl, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        // Main label already shows URI. Hide subtitle to avoid duplicate.
+        // Or show nothing?
+        // Let's hide it if redundant.
+        lv_obj_add_flag(sub_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_set_style_text_color(sub_lbl, lv_palette_main(LV_PALETTE_ORANGE), 0);
+    
+    // Actions Row
+    lv_obj_t *actions = lv_obj_create(info_cont);
+    lv_obj_set_size(actions, LV_PCT(80), 100);
+    lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(actions, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(actions, 0, 0);
+    lv_obj_set_style_border_width(actions, 0, 0);
+    lv_obj_set_style_pad_gap(actions, 40, 0);
+
+    // Call FAB
+    lv_obj_t *btn_call = lv_btn_create(actions);
+    lv_obj_set_size(btn_call, 60, 60);
+    lv_obj_set_style_radius(btn_call, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(btn_call, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0); // Red/Orange per image
+    lv_label_set_text(lv_label_create(btn_call), LV_SYMBOL_CALL);
+    char *num_copy = lv_mem_alloc(128);
+    strcpy(num_copy, number);
+    lv_obj_add_event_cb(btn_call, detail_call_clicked, LV_EVENT_CLICKED, num_copy);
+
+    // Msg FAB
+    lv_obj_t *btn_msg = lv_btn_create(actions);
+    lv_obj_set_size(btn_msg, 60, 60);
+    lv_obj_set_style_radius(btn_msg, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(btn_msg, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
+    lv_label_set_text(lv_label_create(btn_msg), LV_SYMBOL_EDIT); // Message icon fallback
+    
+    char *num_copy_msg = lv_mem_alloc(128);
+    strcpy(num_copy_msg, number);
+    lv_obj_add_event_cb(btn_msg, detail_msg_clicked, LV_EVENT_CLICKED, num_copy_msg);
+    
+    // History List for this contact
+    lv_obj_t *hist_list = lv_obj_create(g_detail_screen);
+    lv_obj_set_size(hist_list, LV_PCT(100), LV_PCT(40)); // Fill rest
+    lv_obj_set_flex_flow(hist_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(hist_list, 0, 0);
+    lv_obj_set_style_bg_opa(hist_list, 0, 0);
+    
+    // Populate History for this contact
+    // We iterate global history. 
+    int count = history_get_count();
+    for(int i=0; i<count; i++) {
+        const call_log_entry_t *e = history_get_at(i);
+        // Simple match: check if number is same
+        if (strstr(e->number, number) || (strlen(name)>0 && strstr(e->name, name))) {
+             lv_obj_t *item = lv_obj_create(hist_list);
+             lv_obj_set_size(item, LV_PCT(100), 50);
+             lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+             lv_obj_set_flex_align(item, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+             
+             // Icon + Status
+             lv_obj_t *left = lv_obj_create(item);
+             lv_obj_set_flex_flow(left, LV_FLEX_FLOW_ROW);
+             lv_obj_set_size(left, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+             lv_obj_set_style_bg_opa(left, 0, 0);
+             lv_obj_set_style_border_width(left, 0, 0);
+             
+             lv_obj_t *icon = lv_label_create(left);
+             // Use tiny arrow
+             if (e->type == CALL_TYPE_INCOMING) {
+                 lv_label_set_text(icon, LV_SYMBOL_DOWN); 
+                 lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_GREEN), 0);
+             } else if (e->type == CALL_TYPE_OUTGOING) {
+                 lv_label_set_text(icon, LV_SYMBOL_UP);
+                 lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_BLUE), 0);
+             } else {
+                 lv_label_set_text(icon, "!");
+                 lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_RED), 0);
+             }
+             
+             lv_obj_t *lbl_st = lv_label_create(left);
+             lv_label_set_text(lbl_st, (e->type == CALL_TYPE_INCOMING) ? "Incoming" : "Outgoing");
+             
+             // Time
+             lv_obj_t *time = lv_label_create(item);
+             char time_short[64];
+             // Extract HH:MM from YYYY-MM-DD HH:MM
+             if (strlen(e->time) > 11) {
+                 strcpy(time_short, e->time + 11);
+             } else {
+                 strcpy(time_short, e->time);
+             }
+             lv_label_set_text(time, time_short);
+        }
+    }
+}
+
+static void log_item_clicked(lv_event_t *e) {
+    if (g_long_press_handled) {
+        g_long_press_handled = false;
+        return;
+    }
+    call_log_entry_t *entry = (call_log_entry_t *)lv_event_get_user_data(e);
+    if (!entry) return;
+    
+    // Resolve name
+    char name_disp[256] = {0};
+    if (db_contact_find(entry->number, name_disp, sizeof(name_disp)) != 0) {
+        if (strlen(entry->name) > 0) strcpy(name_disp, entry->name);
+    }
+    
+    show_detail_screen(entry->number, name_disp);
+}
+
+// Checkbox handler
+static void list_checkbox_cb(lv_event_t *e) {
+    int index = (int)(intptr_t)lv_event_get_user_data(e);
+    lv_obj_t *cb = lv_event_get_target(e);
+    if (index >= 0 && index < 100) {
+        g_selected_items[index] = lv_obj_has_state(cb, LV_STATE_CHECKED);
+        
+        // Update header logic (e.g., enable Delete button if >0)?
+        // For simple toggle, we just update state.
+    }
+}
+
 static void populate_log_list(void) {
-  if (!g_call_log_list)
-    return;
+  if (!g_call_log_list) return;
 
-  // Save scroll position
   lv_coord_t scroll_y = lv_obj_get_scroll_y(g_call_log_list);
-
   lv_obj_clean(g_call_log_list);
 
-  // Add call log entries
-  history_manager_init();
-  int count = history_get_count();
-
-  for (int i = 0; i < count; i++) {
+  int total = history_get_count();
+  char prev_date_str[64] = {0};
+  
+  for (int i = 0; i < total; i++) {
     const call_log_entry_t *entry = history_get_at(i);
-    if (!entry)
-      continue;
+    
+    // Filter
+    if (g_filter_missed_only && entry->type != CALL_TYPE_MISSED) continue;
+    
+    // 1. Date Header
+    char date_header[64];
+    get_date_header(entry->timestamp, date_header, sizeof(date_header));
+    
+    if (strcmp(date_header, prev_date_str) != 0) {
+        // Add Header
+        lv_obj_t *hdr = lv_obj_create(g_call_log_list);
+        lv_obj_set_size(hdr, LV_PCT(100), 30);
+        lv_obj_set_style_bg_color(hdr, lv_palette_lighten(LV_PALETTE_GREY, 4), 0);
+        lv_obj_set_style_border_width(hdr, 0, 0);
+        lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_left(hdr, 10, 0);
+        
+        lv_obj_t *lbl = lv_label_create(hdr);
+        lv_label_set_text(lbl, date_header);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+        strcpy(prev_date_str, date_header);
+    }
+    
+    // 3. Render Item
+    lv_obj_t *item = lv_obj_create(g_call_log_list);
+    lv_obj_set_size(item, LV_PCT(100), 70);
+    lv_obj_set_style_bg_color(item, lv_color_white(), 0);
+    lv_obj_set_style_border_width(item, 0, 0);
+    lv_obj_set_style_border_side(item, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(item, 1, 0);
+    lv_obj_set_style_border_color(item, lv_palette_lighten(LV_PALETTE_GREY, 3), 0);
+    lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(item, 10, 0);
+    lv_obj_set_style_pad_gap(item, 15, 0);
 
-    lv_obj_t *log_item = lv_obj_create(g_call_log_list);
-    lv_obj_set_size(log_item, LV_PCT(95), 70);
-    lv_obj_set_scrollbar_mode(log_item, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(log_item, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(log_item, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(log_item, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // Add Long Press for Context Menu
-    lv_obj_add_flag(log_item,
-                    LV_OBJ_FLAG_CLICKABLE); // Ensure item captures input
-    lv_obj_add_event_cb(log_item, log_long_press_handler, LV_EVENT_LONG_PRESSED,
-                        (void *)(intptr_t)i);
-
-    // Call type icon
-    lv_obj_t *icon_label = lv_label_create(log_item);
-    lv_label_set_text(icon_label, get_call_icon(entry->type));
-    lv_obj_set_style_text_color(icon_label, get_call_color(entry->type), 0);
-    lv_obj_set_style_text_font(icon_label, &lv_font_montserrat_20, 0);
-
-    // Call info container
-    lv_obj_t *info_container = lv_obj_create(log_item);
-    lv_obj_set_flex_grow(info_container, 1); // Use flex grow to fill space
-    lv_obj_set_size(info_container, LV_SIZE_CONTENT, LV_PCT(90)); // Auto width
-    lv_obj_set_flex_flow(info_container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(info_container, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(info_container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_border_width(info_container, 0, 0);
-    lv_obj_set_style_bg_opa(info_container, 0, 0); // Transparent
-    lv_obj_set_style_pad_all(info_container, 0, 0);
-
-    lv_obj_t *details_row = lv_obj_create(info_container);
-    lv_obj_set_size(details_row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(details_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(details_row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(details_row, 0, 0);
-    lv_obj_set_style_border_width(details_row, 0, 0);
-    lv_obj_set_style_bg_opa(details_row, 0, 0);
-
-    // Number (SIP URI) - Cleaned
-    char uri_buf[128];
-    strncpy(uri_buf, entry->number, sizeof(uri_buf) - 1);
-    uri_buf[sizeof(uri_buf) - 1] = '\0'; // Ensure null termination
-
-    char *param_start = strchr(uri_buf, ';');
-    if (param_start) {
-      *param_start = '\0'; // Strip parameters like ;transport=udp
+    // SELECTION MODE
+    if (g_selection_mode) {
+        lv_obj_t *cb = lv_checkbox_create(item);
+        lv_checkbox_set_text(cb, "");
+        if (g_selected_items[i]) lv_obj_add_state(cb, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(cb, list_checkbox_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)i);
+    } else {
+        lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
+        call_log_entry_t *entry_copy = lv_mem_alloc(sizeof(call_log_entry_t));
+        *entry_copy = *entry;
+        lv_obj_add_event_cb(item, log_item_clicked, LV_EVENT_CLICKED, entry_copy);
+        lv_obj_add_event_cb(item, log_long_press_handler, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
     }
 
-    // log_debug("CallLogApplet", "Entry %d cleaned URI: '%s' (Original: '%s')",
-    // i,
-    //           uri_buf, entry->number);
+    // Avatar
+    // Reuse cleaning
+    char uri_clean[128];
+    strncpy(uri_clean, entry->number, sizeof(uri_clean)-1); uri_clean[127] = 0;
+    char *p = strchr(uri_clean, ';'); if(p) *p='\0';
+    if(strncmp(uri_clean, "sip:", 4)==0) { memmove(uri_clean, uri_clean+4, strlen(uri_clean+4)+1); }
+    
+    char number_disp[128], name_disp[128];
+    if (db_contact_find(entry->number, name_disp, sizeof(name_disp)) == 0) {
+        snprintf(number_disp, sizeof(number_disp), "%s", name_disp);
+    } else {
+        snprintf(number_disp, sizeof(number_disp), "%s", uri_clean);
+    }
+    
+    create_avatar(item, number_disp, 40, 0);
+    
+    // Icon
+    lv_obj_t *icon = lv_label_create(item);
+    lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+    if (entry->type == CALL_TYPE_INCOMING) {
+        lv_label_set_text(icon, LV_SYMBOL_DOWN); 
+        lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_GREEN), 0);
+    } else if (entry->type == CALL_TYPE_OUTGOING) {
+        lv_label_set_text(icon, LV_SYMBOL_UP);
+        lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_BLUE), 0);
+    } else {
+        lv_label_set_text(icon, "!"); 
+        lv_obj_set_style_text_color(icon, lv_palette_main(LV_PALETTE_RED), 0);
+    }
+    
+    // Info
+    lv_obj_t *info = lv_obj_create(item);
+    lv_obj_clear_flag(info, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_grow(info, 1);
+    lv_obj_set_width(info, 0); // Important: 0 to allow Flex Grow without forcing full width
+    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(info, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START); // Center Vertically
+    lv_obj_set_style_bg_opa(info, 0, 0);
+    lv_obj_set_style_border_width(info, 0, 0);
+    lv_obj_set_style_pad_all(info, 0, 0);
+    lv_obj_set_style_pad_gap(info, 0, 0);
+    
+    // Restore Name Label
+    lv_obj_t *r1 = lv_label_create(info);
+    lv_label_set_text(r1, number_disp);
+    lv_obj_set_style_text_font(r1, LV_FONT_DEFAULT, 0); 
+    lv_obj_set_style_text_color(r1, lv_color_black(), 0);
+    lv_label_set_long_mode(r1, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(r1, LV_PCT(100));
 
-    lv_obj_t *number_label = lv_label_create(details_row);
-    char number_display[150];
-    // Strip sip: or sips: prefix for display
-    const char *display_ptr = uri_buf;
-    if (strncmp(display_ptr, "sip:", 4) == 0)
-      display_ptr += 4;
-    else if (strncmp(display_ptr, "sips:", 5) == 0)
-      display_ptr += 5;
+    // Debug Info Container (Removed)
+    lv_obj_set_style_bg_opa(info, 0, 0);
 
-    snprintf(number_display, sizeof(number_display), "%s", display_ptr);
-
-    lv_label_set_text(number_label, number_display);
-    lv_obj_set_style_text_color(number_label, lv_color_hex(0x808080),
-                                0); // Keep Grey as per requirements
-    lv_obj_set_style_text_font(number_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_pad_right(number_label, 10,
-                               0); // Spacing between number and time
-
-    // Time
-    lv_obj_t *time_label = lv_label_create(details_row);
-    lv_label_set_text(time_label, entry->time);
-    lv_obj_set_style_text_color(time_label, lv_color_black(),
-                                0); // Black for visibility
-    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_16, 0);
-
-    // Call back button
-    lv_obj_t *call_btn = lv_btn_create(log_item);
-    lv_obj_set_size(call_btn, 60, 40);
-    lv_obj_set_style_bg_color(call_btn, lv_color_hex(0x00AA00), 0);
-    lv_obj_t *call_label = lv_label_create(call_btn);
-    lv_label_set_text(call_label, LV_SYMBOL_CALL);
-    lv_obj_center(call_label);
-    lv_obj_add_event_cb(call_btn, call_back_clicked, LV_EVENT_CLICKED,
-                        (void *)entry);
-
-    // Video Call button
-    lv_obj_t *video_btn = lv_btn_create(log_item);
-    lv_obj_set_size(video_btn, 60, 40);
-    lv_obj_set_style_bg_color(video_btn, lv_color_hex(0x0055AA),
-                              0); // Blue for video
-    lv_obj_t *video_label = lv_label_create(video_btn);
-    lv_label_set_text(video_label, LV_SYMBOL_VIDEO);
-    lv_obj_center(video_label);
-    lv_obj_add_event_cb(video_btn, video_call_back_clicked, LV_EVENT_CLICKED,
-                        (void *)entry);
+    log_info("CallLog", "Added row: '%s'", number_disp);
+    
+    // Time (Subtitle)
+    char time_short[64];
+    if (strlen(entry->time) > 11) strcpy(time_short, entry->time + 11);
+    else strcpy(time_short, entry->time);
+    
+    lv_obj_t *r2 = lv_label_create(info);
+    lv_label_set_text(r2, time_short);
+    lv_obj_set_style_text_color(r2, lv_palette_main(LV_PALETTE_GREY), 0);
   }
-
-  // Restore scroll
+  
   lv_obj_scroll_to_y(g_call_log_list, scroll_y, LV_ANIM_OFF);
+}
+
+static void filter_all_clicked(lv_event_t *e) {
+    (void)e;
+    g_filter_missed_only = false;
+    // Update button styles
+    lv_obj_set_style_bg_color(g_filter_btn_all, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_bg_color(g_filter_btn_missed, lv_palette_main(LV_PALETTE_GREY), 0);
+    populate_log_list();
+}
+
+static void filter_missed_clicked(lv_event_t *e) {
+    (void)e;
+    g_filter_missed_only = true;
+    lv_obj_set_style_bg_color(g_filter_btn_all, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_bg_color(g_filter_btn_missed, lv_palette_main(LV_PALETTE_BLUE), 0);
+    populate_log_list();
+}
+
+static void mode_toggle_clicked(lv_event_t *e) {
+    (void)e;
+    if (g_selection_mode) {
+        // Did we click it to DELETE?
+        // Logic: Trash Icon -> Toggles Selection Mode.
+        // User request: "click it to show multi-selector...".
+        // implies Button enables mode. Then what deletes?
+        // Let's make Trash button EXECUTE delete if already in mode.
+        // And use Back button to cancel.
+        
+        int count = 0;
+        for(int i=0; i<100; i++) if(g_selected_items[i]) count++;
+        
+        if (count > 0) {
+            history_delete_mask(g_selected_items, 100);
+        }
+        
+        // Reset
+        g_selection_mode = false;
+        memset(g_selected_items, 0, sizeof(g_selected_items));
+        
+        // Restore Icon
+        lv_label_set_text(lv_obj_get_child(g_mode_btn, 0), LV_SYMBOL_TRASH);
+        lv_obj_set_style_bg_opa(g_mode_btn, 0, 0); // Transparent
+        lv_obj_set_style_text_color(lv_obj_get_child(g_mode_btn, 0), lv_color_white(), 0);
+
+    } else {
+        // Enter Mode
+        g_selection_mode = true;
+        memset(g_selected_items, 0, sizeof(g_selected_items));
+        
+        // Change Icon to Check/OK
+        lv_label_set_text(lv_obj_get_child(g_mode_btn, 0), LV_SYMBOL_OK); // Confirm Delete
+        lv_obj_set_style_bg_color(g_mode_btn, lv_palette_main(LV_PALETTE_RED), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(g_mode_btn, 0), lv_color_white(), 0);
+    }
+    populate_log_list();
 }
 
 static int call_log_init(applet_t *applet) {
   log_info("CallLogApplet", "Initializing");
   g_log_applet = applet;
-  lv_obj_clean(applet->screen); // Ensure clean state for refresh
+  lv_obj_clean(applet->screen);
 
-  // Create header with back button
-  lv_obj_t *header = lv_obj_create(applet->screen);
-  lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
+  // Main Layout
+  lv_obj_set_flex_flow(applet->screen, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(applet->screen, 0, 0);
+  lv_obj_set_style_pad_gap(applet->screen, 0, 0);
 
-  lv_obj_t *back_btn = lv_btn_create(header);
-  lv_obj_set_size(back_btn, 50, 40);
-  lv_obj_t *back_label = lv_label_create(back_btn);
-  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-  lv_obj_center(back_label);
-  lv_obj_add_event_cb(back_btn, back_btn_clicked, LV_EVENT_CLICKED, NULL);
+  // 1. Header (Manual Layout for precise centering)
+  // 1. Header
+  lv_obj_t *header = ui_create_title_bar(applet->screen, "Call Log", true, back_btn_clicked, NULL);
+  
+  g_mode_btn = ui_header_add_action_btn(header, LV_SYMBOL_TRASH, mode_toggle_clicked, NULL);
 
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "Call Log");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_pad_left(title, 20, 0);
+  // 2. Filter Row (Below Header)
+  lv_obj_t *filter_row = lv_obj_create(applet->screen);
+  lv_obj_set_size(filter_row, LV_PCT(100), 50);
+  lv_obj_set_style_bg_opa(filter_row, 0, 0);
+  lv_obj_set_style_border_width(filter_row, 0, 0);
+  lv_obj_set_flex_flow(filter_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(filter_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_all(filter_row, 5, 0);
+  lv_obj_set_style_pad_gap(filter_row, 20, 0);
 
-  // Create scrollable call log list
+  // Filter Buttons
+  g_filter_btn_all = lv_btn_create(filter_row);
+  lv_obj_set_size(g_filter_btn_all, 80, 36);
+  lv_obj_set_style_bg_color(g_filter_btn_all, lv_palette_main(LV_PALETTE_BLUE), 0); 
+  lv_obj_t *lbl_all = lv_label_create(g_filter_btn_all);
+  lv_label_set_text(lbl_all, "All");
+  lv_obj_center(lbl_all); // Center text
+  lv_obj_add_event_cb(g_filter_btn_all, filter_all_clicked, LV_EVENT_CLICKED, NULL);
+
+  g_filter_btn_missed = lv_btn_create(filter_row);
+  lv_obj_set_size(g_filter_btn_missed, 80, 36);
+  lv_obj_set_style_bg_color(g_filter_btn_missed, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_t *lbl_missed = lv_label_create(g_filter_btn_missed);
+  lv_label_set_text(lbl_missed, "Missed");
+  lv_obj_center(lbl_missed); // Center text
+  lv_obj_add_event_cb(g_filter_btn_missed, filter_missed_clicked, LV_EVENT_CLICKED, NULL);
+
+  // 3. List
   g_call_log_list = lv_obj_create(applet->screen);
-  lv_obj_set_size(g_call_log_list, LV_PCT(95), LV_PCT(80));
-  lv_obj_align(g_call_log_list, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_width(g_call_log_list, LV_PCT(100)); // Full width
+  lv_obj_set_flex_grow(g_call_log_list, 1); 
+  
+  // Match Padding with Header (approx)
+  lv_obj_set_style_pad_left(g_call_log_list, 15, 0);
+  lv_obj_set_style_pad_right(g_call_log_list, 15, 0);
+  
+  lv_obj_align(g_call_log_list, LV_ALIGN_TOP_MID, 0, 0);
   lv_obj_set_flex_flow(g_call_log_list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_scroll_dir(g_call_log_list, LV_DIR_VER);
+  
+  // Add top padding to list so it doesn't touch the header immediately?
+  lv_obj_set_style_pad_top(g_call_log_list, 10, 0);
 
-  // Add call log entries
   populate_log_list();
 
   return 0;
@@ -723,6 +984,9 @@ static void call_log_pause(applet_t *applet) {
 static void call_log_resume(applet_t *applet) {
   (void)applet;
   log_debug("CallLogApplet", "Resumed");
+
+  // Refresh list to show new entries
+  populate_log_list();
 
   if (g_call_log_list) {
     lv_obj_scroll_to_y(g_call_log_list, 0, LV_ANIM_OFF);

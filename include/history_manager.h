@@ -4,44 +4,29 @@
 #include <stdbool.h>
 
 typedef enum {
-  CALL_TYPE_INCOMING,
-  CALL_TYPE_OUTGOING,
-  CALL_TYPE_MISSED
+    CALL_TYPE_INCOMING = 0,
+    CALL_TYPE_OUTGOING,
+    CALL_TYPE_MISSED,
+    CALL_TYPE_REJECTED
 } call_type_t;
 
 typedef struct {
-  char name[64];
-  char number[64];
-  call_type_t type;
-  char time[64];         // Simplified time string for now
-  long timestamp;        // Unix timestamp
-  char account_aor[128]; // Account AOR used for the call
+    char name[64];
+    char number[64];
+    call_type_t type;
+    long timestamp;
+    char time[32]; // Formatted time
+    char account_aor[128];
 } call_log_entry_t;
 
-// Initialize history manager
 void history_manager_init(void);
-
-// Get number of history entries
 int history_get_count(void);
-
-// Get history entry at index
 const call_log_entry_t *history_get_at(int index);
-
-// Add a new history entry
-// Add a new history entry
-int history_add(const char *name, const char *number, call_type_t type,
-                const char *account_aor);
-
-// Remove history entry at index
-void history_remove(int index);
-
-// Clear all history
+int history_add(const char *name, const char *number, call_type_t type, const char *account_aor);
 void history_clear(void);
-
-// Load history from file
+void history_remove(int index);
 int history_load(void);
-
-// Save history to file
 int history_save(void);
+void history_delete_mask(const bool *selection, int count);
 
 #endif // HISTORY_MANAGER_H

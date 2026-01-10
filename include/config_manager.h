@@ -36,8 +36,11 @@ typedef struct {
 
   // Media & Network
   char media_enc[32]; // e.g., srtp, zrtp, none
-  char media_nat[32]; // e.g., ice, stun, turn
+  // char media_nat[32]; // Deprecated, replaced by use_ice
   bool rtcp_mux;
+  char transport[32]; // udp, tcp, tls
+  bool use_ice;
+  char stun_server[128];
 
   // SIP / Call Control
   bool prack;             // Reliable provisional responses
@@ -56,6 +59,7 @@ typedef struct {
   char listen_address[64];
   int address_family; // 0=AF_UNSPEC, 1=AF_INET, 2=AF_INET6
   char dns_servers[128];
+  char stun_server[128];
 
   // Security / TLS
   bool use_tls_client_cert;

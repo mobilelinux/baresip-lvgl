@@ -2,11 +2,43 @@ cmake_minimum_required(VERSION 3.10)
 project(baresip-lvgl C)
 
 set(CMAKE_C_STANDARD 99)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -D_THREAD_SAFE -DSTATIC")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -D_THREAD_SAFE -DHAVE_INET6")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rdynamic")
 
-# Find SDL2
+# Force static build for baresip and modules
+set(STATIC OFF CACHE BOOL "Build static" FORCE)
+
+# Force variables for FindRE.cmake and FindREM.cmake inside subprojects
+set(RE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/re/include CACHE PATH "re include" FORCE)
+set(RE_LIBRARY re CACHE STRING "re target" FORCE)
+set(RE_LIBRARIES re CACHE STRING "re target" FORCE)
+set(RE_INCLUDE_DIRS ${RE_INCLUDE_DIR} CACHE PATH "re include" FORCE)
+set(re_FOUND TRUE CACHE BOOL "re found" FORCE)
+
+set(REM_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/rem/include CACHE PATH "rem include" FORCE)
+set(REM_LIBRARY rem CACHE STRING "rem target" FORCE)
+set(REM_LIBRARIES rem CACHE STRING "rem target" FORCE)
+set(REM_INCLUDE_DIRS ${REM_INCLUDE_DIR} CACHE PATH "rem include" FORCE)
+set(rem_FOUND TRUE CACHE BOOL "rem found" FORCE)
+
+# Find Threads, OpenSSL, ZLIB
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(ZLIB REQUIRED)
+
+# Disable Tests to avoid mod_table linking error in shared mode
+set(BUILD_TESTING OFF CACHE BOOL "Disable tests" FORCE)
+set(BARESIP_UNIT_TESTS OFF CACHE BOOL "Disable tests" FORCE)
+
+# Build dependencies
+add_subdirectory(deps/re)
+add_subdirectory(deps/rem)
+add_subdirectory(deps/baresip)
+
+# Find SDL2 (Optional/Unused for FBDEV but kept for reference or dependencies)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED sdl2)
+# pkg_check_modules(SDL2 sdl2) 
 
 if(NOT APPLE)
     pkg_check_modules(ALSA REQUIRED alsa)
@@ -16,26 +48,25 @@ endif()
 # Include Directories
 include_directories(
     include
+    fake_sdl
     lvgl
     lv_drivers
     .
     deps/baresip/include
     deps/re/include
-    ${SDL2_INCLUDE_DIRS}
-    /opt/homebrew/include
-)
-
-# Link Directories
-link_directories(
-    /opt/homebrew/lib
+    src/manager
+    deps/rem/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
 )
 
 # Source Files
 file(GLOB_RECURSE LVGL_SOURCES "lvgl/src/*.c")
 
+# Use FBDEV and EVDEV drivers instead of SDL
 set(LV_DRIVERS_SOURCES
-    lv_drivers/sdl/sdl_common.c
-    lv_drivers/sdl/sdl.c
+    lv_drivers/display/fbdev.c
+    lv_drivers/indev/evdev.c
 )
 
 file(GLOB_RECURSE APP_SOURCES 
@@ -44,28 +75,8 @@ file(GLOB_RECURSE APP_SOURCES
 
 # Module Sources
 set(MODULE_SOURCES
-    deps/baresip/modules/fakevideo/fakevideo.c
-    deps/baresip/modules/selfview/selfview.c
-    deps/baresip/modules/avcodec/avcodec.c
-    deps/baresip/modules/avcodec/decode.c
-    deps/baresip/modules/avcodec/encode.c
-    deps/baresip/modules/avcodec/sdp.c
-    deps/baresip/modules/avformat/avformat.c
-    deps/baresip/modules/avformat/audio.c
-    deps/baresip/modules/avformat/video.c
-    deps/baresip/modules/swscale/swscale.c
-    src/modules/gb28181/gb28181.c
+    # src/modules/gb28181/gb28181.c
 )
-
-if(APPLE)
-    list(APPEND MODULE_SOURCES deps/baresip/modules/avcapture/avcapture.m)
-    list(APPEND MODULE_SOURCES deps/baresip/modules/audiounit/audiounit.c)
-else()
-    list(APPEND MODULE_SOURCES deps/baresip/modules/alsa/alsa.c)
-    list(APPEND MODULE_SOURCES deps/baresip/modules/alsa/alsa_src.c)
-    list(APPEND MODULE_SOURCES deps/baresip/modules/alsa/alsa_play.c)
-    list(APPEND MODULE_SOURCES deps/baresip/modules/v4l2/v4l2.c)
-endif()
 
 # Executable
 add_executable(baresip-lvgl
@@ -75,13 +86,14 @@ add_executable(baresip-lvgl
     ${MODULE_SOURCES}
 )
 
+# Enable exporting symbols so dynamic modules (opus.so) can resolve them
+set_target_properties(baresip-lvgl PROPERTIES ENABLE_EXPORTS TRUE)
+
 # Link Libraries
 target_link_libraries(baresip-lvgl
-    ${SDL2_LIBRARIES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/deps/baresip/build/libbaresip.a
-    ${CMAKE_CURRENT_SOURCE_DIR}/deps/re/build/libre.a
-    ssl crypto pthread z opus resolv sqlite3
-    avcodec avformat avutil swscale avdevice swresample
+    -Wl,--whole-archive baresip re rem -Wl,--no-whole-archive
+    ssl crypto pthread z resolv sqlite3
+    # avcodec avformat avutil swscale avdevice swresample
 )
 
 if(APPLE)
@@ -99,6 +111,8 @@ if(APPLE)
 else()
     target_link_libraries(baresip-lvgl
         ${ALSA_LIBRARIES}
-        ${LIBV4L2_LIBRARIES}
+        # ${LIBV4L2_LIBRARIES}
     )
 endif()
+
+install(TARGETS baresip-lvgl DESTINATION bin)
