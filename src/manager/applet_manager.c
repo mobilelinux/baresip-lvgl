@@ -122,6 +122,9 @@ int applet_manager_launch_applet(applet_t *applet) {
   return 0;
 }
 
+
+
+
 applet_t *applet_manager_get_applet(const char *name) {
   if (!name) return NULL;
 

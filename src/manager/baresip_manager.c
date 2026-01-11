@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <re.h>
-#include <rem_vid.h>
+#include <rem_vid.h> 
+ // #include <baresip.h> removed
 
 // Forward Decls for missing/implicit functions
 struct message;
@@ -280,6 +281,30 @@ static void update_account_status(const char *aor, reg_status_t status) {
 extern const struct mod_export exports_sdl_vidisp;
 extern const struct mod_export exports_window;
 
+// UI Callbacks
+extern void chat_applet_on_message(const char *peer, const char *text);
+extern void home_applet_on_message(void);
+
+typedef struct {
+    char *peer;
+    char *text;
+} msg_ui_event_t;
+
+static void ui_message_dispatch(void *arg) {
+    msg_ui_event_t *evt = (msg_ui_event_t *)arg;
+    if (evt) {
+        log_info("BaresipManager", "Dispatching UI Message Event");
+        if (evt->peer && evt->text) {
+             chat_applet_on_message(evt->peer, evt->text);
+        }
+        home_applet_on_message();
+        
+        if (evt->peer) free(evt->peer);
+        if (evt->text) free(evt->text);
+        free(evt);
+    }
+}
+
 static void message_handler(struct ua *ua, const struct pl *peer, const struct pl *ctype,
                             struct mbuf *body, void *arg) {
     (void)ua;
@@ -309,12 +334,21 @@ static void message_handler(struct ua *ua, const struct pl *peer, const struct p
     // Save to DB (Incoming = 0)
     db_chat_add(from_uri, 0, text);
 
+    // Dispatch UI Update
+    msg_ui_event_t *evt = malloc(sizeof(msg_ui_event_t));
+    if (evt) {
+        evt->peer = strdup(from_uri);
+        evt->text = strdup(text);
+        lv_async_call(ui_message_dispatch, evt);
+    }
+
     mem_deref(text);
     
     // Note: Baresip handles 200 OK automatically if handler returns (or earlier in the chain)
 }
 
 
+// Raw Event Handler Removed
 static void call_event_handler(enum bevent_ev ev, struct bevent *event, void *arg) {
   struct ua *ua = bevent_get_ua(event);
   struct call *call = bevent_get_call(event);
@@ -332,7 +366,12 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event, void *ar
   case BEVENT_REGISTERING: {
     // struct ua *ua = ua; // REMOVED: Shadowing caused ua to be uninitialized!
     if (ua) {
-      const char *aor = account_aor(ua_account(ua));
+      struct account *acc = ua_account(ua);
+      if (acc) {
+          account_set_catchall(acc, true);
+          log_info("BaresipManager", "Dynamic Catch-All ENABLED for %s", account_aor(acc));
+      }
+      const char *aor = account_aor(acc);
       log_info("BaresipManager", ">>> REGISTERING: %s", aor);
       update_account_status(aor, REG_STATUS_REGISTERING);
     } else {
@@ -343,7 +382,11 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event, void *ar
   case BEVENT_REGISTER_OK: {
     // struct ua *ua = ua; // REMOVED: Shadowing caused ua to be uninitialized!
     if (ua) {
-      const char *aor = account_aor(ua_account(ua));
+      struct account *acc = ua_account(ua);
+      if (acc) {
+          account_set_catchall(acc, true);
+      }
+      const char *aor = account_aor(acc);
       update_account_status(aor, REG_STATUS_REGISTERED);
     } else {
       log_warn("BaresipManager", ">>> REGISTER_OK: ua is NULL! (Cannot update status)");
@@ -383,77 +426,76 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event, void *ar
     }
     return;
   }
+// Prototype for ua_calls (if not in headers)
+struct list *ua_calls(const struct ua *ua);
+
   case BEVENT_SIPSESS_CONN:
     // If call is null, try to get it from UA
     if (!g_call_state.current_call) {
-      struct ua *ua = ua;
-      const struct sip_msg *msg = NULL;
+      // struct ua *ua = bevent_get_ua(event);
+      // const struct sip_msg *msg = bevent_get_msg(event); // Not available?
 
-      log_debug("BaresipManager", "SIPSESS_CONN: Event UA=%p, Msg=%p",
-                (void *)ua, (void *)msg);
+      log_debug("BaresipManager", "SIPSESS_CONN: Event UA=%p, Call=%p", (void *)ua, (void*)call);
 
-      if (!ua && msg) {
-        ua = uag_find_msg(msg);
-        log_debug("BaresipManager",
-                  "SIPSESS_CONN: UA resolved via uag_find_msg: %p", (void *)ua);
-
-        // Fuzzy Match Fallback
-        if (!ua) {
-          log_debug("BaresipManager", "SIPSESS_CONN: uag_find_msg failed. "
-                                      "Attempting fuzzy match...");
-          struct le *le;
-          for (le = ((struct list *)uag_list())->head; le; le = le->next) {
-            struct ua *candidate_ua = le->data;
-            struct account *acc = ua_account(candidate_ua);
-            struct uri *acc_uri = account_luri(acc);
-
-            if (acc_uri && acc_uri->user.l > 0 &&
-                msg->uri.user.l >= acc_uri->user.l) {
-              if (0 ==
-                  memcmp(msg->uri.user.p, acc_uri->user.p, acc_uri->user.l)) {
-                ua = candidate_ua;
-                log_debug("BaresipManager",
-                          "SIPSESS_CONN: Fuzzy match success! UA: %p",
-                          (void *)ua);
-                // account_set_catchall(acc, true);
-                break;
-              }
-            }
-          }
-        }
-      }
-
-      if (ua) {
-        if (msg) {
-          // ua_accept(ua, msg);
-        }
-        call = ua_call(ua);
-      }
-
-      if (!g_call_state.current_call) {
-        // Global search fallback
-        struct le *le;
-        for (le = ((struct list *)uag_list())->head; le; le = le->next) {
-          struct ua *u = le->data;
-          struct call *c = ua_call(u);
-          if (c) {
-            call = c;
-            break;
-          }
+      // Attempt to resolve call from UA if valid
+      if (ua && !call) {
+        struct call *c = ua_call(ua);
+        if (c) {
+             call = c;
+             log_debug("BaresipManager", "SIPSESS_CONN: Resolved call from UA: %p", (void*)call);
         }
       }
     }
 
       if (g_call_state.state == CALL_STATE_IDLE ||
-        g_call_state.state == CALL_STATE_INCOMING) {
-      log_debug("BaresipManager", ">>> SIPSESS_CONN (IDLE/INCOMING)");
-      g_call_state.state = CALL_STATE_INCOMING;
-      g_call_state.current_call = call;
-      if (call)
-        safe_strncpy(g_call_state.peer_uri, call_peeruri(call), sizeof(g_call_state.peer_uri));
-      if (g_call_state.callback)
-        g_call_state.callback(CALL_STATE_INCOMING, call ? call_peeruri(call) : "unknown", (void *)call);
-    }
+           g_call_state.state == CALL_STATE_INCOMING) {
+        
+        // REVERT: Allow transition even if call is NULL to ensure UI shows (requested by user)
+        // Attempt Deep Scan if call is still NULL
+        if (!g_call_state.current_call && !call) {
+             struct le *le;
+             log_debug("BaresipManager", "SIPSESS_CONN: Attempting DEEP SCAN for call...");
+             for (le = ((struct list *)uag_list())->head; le; le = le->next) {
+                 struct ua *u = le->data;
+                 struct list *calls = ua_calls(u);
+                 struct le *lec;
+                 if (calls) {
+                     for (lec = calls->head; lec; lec = lec->next) {
+                         struct call *c = lec->data;
+                         if (c) {
+                             call = c;
+                             log_debug("BaresipManager", "SIPSESS_CONN: Deep Scan found call %p on UA %p", (void*)c, (void*)u);
+                             break;
+                         }
+                     }
+                 }
+                 if (call) break;
+             }
+        }
+
+        log_debug("BaresipManager", ">>> SIPSESS_CONN (IDLE/INCOMING) -> Transitioning (Call=%p)", call);
+        g_call_state.state = CALL_STATE_INCOMING;
+        if (call) {
+            g_call_state.current_call = call;
+            const char *peer = call_peeruri(call);
+            safe_strncpy(g_call_state.peer_uri, peer, sizeof(g_call_state.peer_uri));
+            add_or_update_call(call, CALL_STATE_INCOMING, peer);
+            
+            if (g_call_state.callback)
+              g_call_state.callback(CALL_STATE_INCOMING, peer, (void *)call);
+        } else {
+             // Phantom UI - Trigger callback anyway so User sees something
+             log_warn("BaresipManager", ">>> SIPSESS_CONN: Phantom Switch (No Call Object found yet)");
+             
+             // Log as Missed Call (Phantom) to ensure Badge appears
+             // This covers the case where the call dies without ever being "valid" to baresip
+             history_add("Unknown", "Unknown", CALL_TYPE_MISSED, "Unknown");
+
+             if (g_call_state.callback)
+               g_call_state.callback(CALL_STATE_INCOMING, "Incoming...", NULL);
+        }
+      }
+
     break;
 
   default:
@@ -619,28 +661,30 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event, void *ar
         log_info("BaresipManager", ">>> Switched to other call (Count: %d)", others);
       }
     } else if (g_call_state.current_call == NULL) {
+      // Safety net: If no current call, ensure we are TERMINATED/IDLE
+      // This handles the case where we were in INCOMING phantom state (current_call=NULL)
+      // and now we get a CLOSED event.
       g_call_state.state = CALL_STATE_TERMINATED;
-      log_info("BaresipManager", ">>> State set to TERMINATED (No current call)");
+      log_info("BaresipManager", ">>> State set to TERMINATED (No current call, forced cleanup)");
     }
 
     if (g_call_state.state == CALL_STATE_TERMINATED) {
          if (g_call_state.callback) {
              log_info("BaresipManager", ">>> Invoking Callback with TERMINATED");
              g_call_state.callback(CALL_STATE_TERMINATED, peer, (void *)call);
-         } else {
-             log_error("BaresipManager", ">>> ERROR: Callback is NULL in TERMINATED state!");
          }
     } else if (g_call_state.callback) {
       // Notify applet to refresh list because a background call ended
-      // Reuse CALL_STATE_ESTABLISHED to trigger refresh?
-      // Or just let the applet poll? The applet uses `on_call_state_change`.
-      // We should signal that the stack state changed.
-      // Ideally we need a separate event, but re-sending ESTABLISHED with
-      // current peer might work.
       if (g_call_state.current_call)
         g_call_state.callback(g_call_state.state, g_call_state.peer_uri,
                               (void *)g_call_state.current_call);
     }
+    
+    // Reset to idle happens next loop via check_ui or logic below?
+    // Let's force IDLE if TERMINATED after callback
+     if (g_call_state.state == CALL_STATE_TERMINATED) {
+         g_call_state.state = CALL_STATE_IDLE;
+     }
 
     // Reset to idle if really no calls
     bool any_calls = false;
@@ -666,6 +710,9 @@ static void call_event_handler(enum bevent_ev ev, struct bevent *event, void *ar
 // Global video objects (Set by Applet)
 static lv_obj_t *g_remote_video_obj = NULL;
 static lv_obj_t *g_local_video_obj = NULL;
+
+
+
 
 struct vidisp_st {
   struct le le;
@@ -847,9 +894,10 @@ static void lvgl_vidisp_hide(struct vidisp_st *st) { (void)st; }
 
 
 // API to set LVGL Objects
-void baresip_manager_set_video_objects(lv_obj_t *remote, lv_obj_t *local) {
-    g_remote_video_obj = remote;
-    g_local_video_obj = local;
+// API to set LVGL Objects
+void baresip_manager_set_video_objects(void *remote, void *local) {
+    g_remote_video_obj = (lv_obj_t*)remote;
+    g_local_video_obj = (lv_obj_t*)local;
 }
 
 // Process Video - Called from Main Thread (LVGL Loop)
@@ -940,7 +988,7 @@ static void create_default_config(const char *config_path) {
 #endif
                "video_display\t\tsdl_vidisp,nil\n"
                "# Connect\n"
-               "sip_verify_server\tyes\n"
+               "sip_verify_server\tno\n"
                "answer_mode\t\tmanual\n"
                "# Modules\n"
                "module_load\t\tstdio.so\n"
@@ -1013,6 +1061,11 @@ static void patch_config_file(const char *config_path, const app_config_t *app_c
     else if (strstr(line, "sip_keepalive_interval")) {
       fprintf(f_out, "%s", line);
       keepalive_found = true;
+    }
+    // Force sip_verify_server to no
+    else if (strstr(line, "sip_verify_server")) {
+         fprintf(f_out, "sip_verify_server\tno\n");
+         log_info("BaresipManager", "Patched sip_verify_server to no");
     } else {
       fprintf(f_out, "%s", line);
     }
@@ -1349,6 +1402,7 @@ int baresip_manager_init(void) {
   // Register event handler
   // Register event handler
   bevent_register(call_event_handler, NULL);
+  // Raw Handler Removed
 
   // Initialize Messaging Subsystem
   err = message_init(&g_message);
@@ -1370,8 +1424,21 @@ int baresip_manager_init(void) {
 
   printf("DEBUG: Post-mutex_alloc\n"); fflush(stdout);
 
+  // FORCE CATCH-ALL on all accounts to ensure Incoming Call Matching
+  struct le *le;
+  int acc_count = 0;
+  for (le = ((struct list *)uag_list())->head; le; le = le->next) {
+      struct ua *u = le->data;
+      struct account *acc = ua_account(u);
+      if (acc) {
+          account_set_catchall(acc, true);
+          log_info("BaresipManager", "Enabled CATCH-ALL on account %s", account_aor(acc));
+          acc_count++;
+      }
+  }
+  log_info("BaresipManager", "Catch-All applied to %d accounts", acc_count);
+
   log_info("BaresipManager", "Initialization complete");
-  log_info("BaresipManager", "Starting Call Watchdog...");
   log_info("BaresipManager", "Starting Call Watchdog...");
   tmr_init(&watchdog_tmr);
   tmr_start(&watchdog_tmr, 1000, check_call_watchdog, NULL);
@@ -1602,19 +1669,62 @@ int baresip_manager_videocall(const char *uri) {
 }
 
 int baresip_manager_answer_call(bool video) {
-  if (!g_call_state.current_call) return -1;
+  if (!g_call_state.current_call) {
+      log_warn("BaresipManager", "Answer: No current call... Attempting scan");
+      struct le *le;
+      struct list *al = uag_list();
+      int ua_idx = 0;
+      if (al) {
+         for (le = al->head; le; le = le->next) {
+             struct ua *u = le->data;
+             // Deep Scan: Check all calls on this UA
+             struct list *calls = ua_calls(u);
+             if (calls) {
+                 struct le *lec;
+                 for (lec = calls->head; lec; lec = lec->next) {
+                     struct call *c = lec->data;
+                     log_info("BaresipManager", "Answer: Scan Call %p on UA %p (State: %d)", c, u, c ? call_state(c) : -1);
+                     if (c && call_state(c) != CALL_STATE_TERMINATED) {
+                          log_info("BaresipManager", "Answer: Found call via Deep Scan: %p", c);
+                          g_call_state.current_call = c;
+                          const char *p = call_peeruri(c);
+                          safe_strncpy(g_call_state.peer_uri, p, sizeof(g_call_state.peer_uri));
+                          add_or_update_call(c, call_state(c), p);
+                          break;
+                     }
+                 }
+             }
+             if (g_call_state.current_call) break;
+         }
+      }
+      
+      if (!g_call_state.current_call) {
+        log_warn("BaresipManager", "Answer Failed: Scan found nothing.");
+        return -1;
+      }
+  }
+  log_info("BaresipManager", "Answering call %p (Video=%d)", (void*)g_call_state.current_call, video);
   call_answer(g_call_state.current_call, 200, video ? VIDMODE_ON : VIDMODE_OFF);
   return 0;
 }
 
 int baresip_manager_reject_call(void *call_ptr) {
-  if (!call_ptr) return -1;
+  if (!call_ptr) call_ptr = g_call_state.current_call;
+  if (!call_ptr) {
+      log_warn("BaresipManager", "Reject Failed: No call ptr");
+      return -1;
+  }
+  log_info("BaresipManager", "Rejecting call %p", call_ptr);
   call_hangup((struct call *)call_ptr, 486, "Busy Here");
   return 0;
 }
 
 int baresip_manager_hangup(void) {
-  if (!g_call_state.current_call) return -1;
+  if (!g_call_state.current_call) {
+      log_warn("BaresipManager", "Hangup Failed: No current call");
+      return -1;
+  }
+  log_info("BaresipManager", "Hanging up call %p", (void*)g_call_state.current_call);
   call_hangup(g_call_state.current_call, 0, NULL);
   return 0;
 }
@@ -1926,6 +2036,46 @@ static int internal_add_account(const voip_account_t *acc) {
 // --- Active Calls and Call Control ---
 
 int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
+  // Self-Healing: Check for untracked calls if we are in a call state but have no objects
+  // This recovers from missing BEVENT_CALL_INCOMING (Event 10)
+  if (g_call_state.state != CALL_STATE_IDLE) {
+      bool found_tracked = false;
+      for(int i=0; i<MAX_CALLS; i++) {
+          if (g_call_state.active_calls[i].call) {
+              found_tracked = true;
+              break;
+          }
+      }
+      
+      if (!found_tracked || !g_call_state.current_call) {
+          struct le *le;
+          struct list *al = uag_list();
+          if (al) {
+             for (le = al->head; le; le = le->next) {
+                 struct ua *u = le->data;
+                 struct call *c = ua_call(u);
+                 if (c) {
+                    log_warn("BaresipManager", "Self-Healing: Found untracked call %p (State: %d)!", c, call_state(c));
+                    
+                    // Adopt it
+                    if (!g_call_state.current_call) g_call_state.current_call = c;
+                    
+                    // Add to list
+                    const char *p = call_peeruri(c);
+                    safe_strncpy(g_call_state.peer_uri, p, sizeof(g_call_state.peer_uri));
+                    add_or_update_call(c, call_state(c), p);
+                    
+                    // Correct global state if needed
+                    if (g_call_state.state == CALL_STATE_INCOMING) {
+                         // Ensure we have correct state from object
+                    }
+                    break; 
+                 }
+             }
+          }
+      }
+  }
+
   int count = 0;
   for (int i = 0; i < MAX_CALLS && count < max_count; i++) {
     struct call *c = g_call_state.active_calls[i].call;
@@ -1933,11 +2083,14 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
       // Self-healing: Check actual Baresip state
       enum call_state real_state = call_state(c);
 
-      if (real_state == CALL_STATE_TERMINATED ||
-          g_call_state.active_calls[i].state == CALL_STATE_TERMINATED) {
+      // Exempt INCOMING state from zombie check to allow setup to complete
+      // SIPSESS_CONN creates call object before fully initialized
+      if (g_call_state.active_calls[i].state != CALL_STATE_INCOMING && 
+         (real_state == CALL_STATE_TERMINATED ||
+          g_call_state.active_calls[i].state == CALL_STATE_TERMINATED)) {
         log_warn("BaresipManager",
-                 "Found zombie call %p (TERMINATED) in active list. Cleaning up...",
-                 (void *)c);
+                 "Found zombie call %p (TERMINATED) in active list. Cleaning up... (State: %d, Real: %d)",
+                 (void *)c, g_call_state.active_calls[i].state, real_state);
                  
         // ADD HISTORY for Zombie
         const char *peer = g_call_state.active_calls[i].peer_uri;
@@ -2214,6 +2367,11 @@ static int internal_send_message(const char *peer_uri, const char *text) {
     }
 
     log_info("BaresipManager", "internal_send_message: Final URI='%s'", final_uri);
+    
+    // Save to DB before sending to ensure persistence even if send fails (e.g. network/simulated error)
+    log_info("BaresipManager", "internal_send_message: Saving to DB...");
+    db_chat_add(final_uri, 1, text);
+
     log_info("BaresipManager", "Sending MESSAGE... text len=%zu", strlen(text));
     
     // message_send takes (ua, peer, msg, resp_handler, arg)
@@ -2224,10 +2382,7 @@ static int internal_send_message(const char *peer_uri, const char *text) {
         return err;
     }
     
-    log_info("BaresipManager", "internal_send_message: Message sent successfully. Saving to DB...");
-    db_chat_add(final_uri, 1, text);
-
-    log_info("BaresipManager", "internal_send_message: Saved to DB. DONE.");
+    log_info("BaresipManager", "internal_send_message: Message sent successfully.");
     return 0;
 }
 

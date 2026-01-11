@@ -49,13 +49,65 @@ static void show_call_log_context_menu(const call_log_entry_t *entry,
 static bool g_filter_missed_only = false;
 static bool g_selection_mode = false;
 static bool g_selected_items[100]; // Matches MAX_HISTORY behavior
-static lv_obj_t *g_mode_btn = NULL; // Trash/Delete button
+static lv_obj_t *g_mode_btn = NULL; // Edit/Close button in header
+static lv_obj_t *g_log_trash_btn = NULL; // Floating Trash button
 static lv_obj_t *g_filter_btn_all = NULL;
 static lv_obj_t *g_filter_btn_missed = NULL;
 
 extern void history_delete_mask(const bool *selection, int count);
 
+// Helper to refresh the list content
+static void populate_log_list(void);
+
 // Picker Implementation
+// ...
+
+// --- Handlers ---
+
+static void on_edit_clicked(lv_event_t *e) {
+    (void)e;
+    g_selection_mode = !g_selection_mode;
+    if (!g_selection_mode) {
+         memset(g_selected_items, 0, sizeof(g_selected_items));
+    }
+    
+    // Update UI
+    if (g_mode_btn) {
+        lv_obj_t *lbl = lv_obj_get_child(g_mode_btn, 0); // Assuming label is 0th child
+        if (lbl) lv_label_set_text(lbl, g_selection_mode ? LV_SYMBOL_CLOSE : LV_SYMBOL_EDIT);
+    }
+    
+    if (g_log_trash_btn) {
+        // Always start with Trash HIDDEN in selection mode (count=0)
+        lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    populate_log_list();
+}
+
+static void on_trash_clicked(lv_event_t *e) {
+    (void)e;
+    int count = history_get_count();
+    if (count > 0) {
+        history_delete_mask(g_selected_items, count);
+        log_info("CallLogApplet", "Deleted selected items");
+    }
+    g_selection_mode = false;
+    memset(g_selected_items, 0, sizeof(g_selected_items));
+
+    // Reset Icon
+    if (g_mode_btn && lv_obj_get_child_cnt(g_mode_btn) > 0) {
+         lv_obj_t *lbl = lv_obj_get_child(g_mode_btn, 0);
+         lv_label_set_text(lbl, LV_SYMBOL_EDIT);
+    }
+    
+    if (g_log_trash_btn) {
+        lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    populate_log_list();
+}
+
 static void close_picker_modal(void) {
   if (g_account_picker_modal) {
     lv_obj_del(g_account_picker_modal);
@@ -166,6 +218,9 @@ static void context_menu_cancel(lv_event_t *e) { close_context_menu(); }
 
 // Need reference to self for refresh
 extern applet_t call_log_applet;
+
+// --- Handlers (Defined above) ---
+
 
 // Helper to refresh the list content
 static void populate_log_list(void);
@@ -716,8 +771,15 @@ static void list_checkbox_cb(lv_event_t *e) {
     if (index >= 0 && index < 100) {
         g_selected_items[index] = lv_obj_has_state(cb, LV_STATE_CHECKED);
         
-        // Update header logic (e.g., enable Delete button if >0)?
-        // For simple toggle, we just update state.
+        // Update Trash Visibility
+        if (g_log_trash_btn) {
+            bool any_selected = false;
+            for(int i=0; i<100; i++) {
+                if (g_selected_items[i]) { any_selected = true; break; }
+            }
+            if (any_selected) lv_obj_clear_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
@@ -746,6 +808,7 @@ static void populate_log_list(void) {
         lv_obj_set_size(hdr, LV_PCT(100), 30);
         lv_obj_set_style_bg_color(hdr, lv_palette_lighten(LV_PALETTE_GREY, 4), 0);
         lv_obj_set_style_border_width(hdr, 0, 0);
+        lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_left(hdr, 10, 0);
@@ -761,6 +824,7 @@ static void populate_log_list(void) {
     lv_obj_set_size(item, LV_PCT(100), 70);
     lv_obj_set_style_bg_color(item, lv_color_white(), 0);
     lv_obj_set_style_border_width(item, 0, 0);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_border_side(item, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(item, 1, 0);
     lv_obj_set_style_border_color(item, lv_palette_lighten(LV_PALETTE_GREY, 3), 0);
@@ -868,45 +932,6 @@ static void filter_missed_clicked(lv_event_t *e) {
     populate_log_list();
 }
 
-static void mode_toggle_clicked(lv_event_t *e) {
-    (void)e;
-    if (g_selection_mode) {
-        // Did we click it to DELETE?
-        // Logic: Trash Icon -> Toggles Selection Mode.
-        // User request: "click it to show multi-selector...".
-        // implies Button enables mode. Then what deletes?
-        // Let's make Trash button EXECUTE delete if already in mode.
-        // And use Back button to cancel.
-        
-        int count = 0;
-        for(int i=0; i<100; i++) if(g_selected_items[i]) count++;
-        
-        if (count > 0) {
-            history_delete_mask(g_selected_items, 100);
-        }
-        
-        // Reset
-        g_selection_mode = false;
-        memset(g_selected_items, 0, sizeof(g_selected_items));
-        
-        // Restore Icon
-        lv_label_set_text(lv_obj_get_child(g_mode_btn, 0), LV_SYMBOL_TRASH);
-        lv_obj_set_style_bg_opa(g_mode_btn, 0, 0); // Transparent
-        lv_obj_set_style_text_color(lv_obj_get_child(g_mode_btn, 0), lv_color_white(), 0);
-
-    } else {
-        // Enter Mode
-        g_selection_mode = true;
-        memset(g_selected_items, 0, sizeof(g_selected_items));
-        
-        // Change Icon to Check/OK
-        lv_label_set_text(lv_obj_get_child(g_mode_btn, 0), LV_SYMBOL_OK); // Confirm Delete
-        lv_obj_set_style_bg_color(g_mode_btn, lv_palette_main(LV_PALETTE_RED), 0);
-        lv_obj_set_style_text_color(lv_obj_get_child(g_mode_btn, 0), lv_color_white(), 0);
-    }
-    populate_log_list();
-}
-
 static int call_log_init(applet_t *applet) {
   log_info("CallLogApplet", "Initializing");
   g_log_applet = applet;
@@ -919,41 +944,39 @@ static int call_log_init(applet_t *applet) {
 
   // 1. Header (Manual Layout for precise centering)
   // 1. Header
+  // 1. Header
   lv_obj_t *header = ui_create_title_bar(applet->screen, "Call Log", true, back_btn_clicked, NULL);
   
-  g_mode_btn = ui_header_add_action_btn(header, LV_SYMBOL_TRASH, mode_toggle_clicked, NULL);
-
-  // 2. Filter Row (Below Header)
-  lv_obj_t *filter_row = lv_obj_create(applet->screen);
-  lv_obj_set_size(filter_row, LV_PCT(100), 50);
-  lv_obj_set_style_bg_opa(filter_row, 0, 0);
-  lv_obj_set_style_border_width(filter_row, 0, 0);
-  lv_obj_set_flex_flow(filter_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(filter_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_all(filter_row, 5, 0);
-  lv_obj_set_style_pad_gap(filter_row, 20, 0);
-
-  // Filter Buttons
-  g_filter_btn_all = lv_btn_create(filter_row);
-  lv_obj_set_size(g_filter_btn_all, 80, 36);
-  lv_obj_set_style_bg_color(g_filter_btn_all, lv_palette_main(LV_PALETTE_BLUE), 0); 
-  lv_obj_t *lbl_all = lv_label_create(g_filter_btn_all);
-  lv_label_set_text(lbl_all, "All");
-  lv_obj_center(lbl_all); // Center text
-  lv_obj_add_event_cb(g_filter_btn_all, filter_all_clicked, LV_EVENT_CLICKED, NULL);
-
-  g_filter_btn_missed = lv_btn_create(filter_row);
-  lv_obj_set_size(g_filter_btn_missed, 80, 36);
-  lv_obj_set_style_bg_color(g_filter_btn_missed, lv_palette_main(LV_PALETTE_GREY), 0);
-  lv_obj_t *lbl_missed = lv_label_create(g_filter_btn_missed);
-  lv_label_set_text(lbl_missed, "Missed");
-  lv_obj_center(lbl_missed); // Center text
-  lv_obj_add_event_cb(g_filter_btn_missed, filter_missed_clicked, LV_EVENT_CLICKED, NULL);
+  // Edit Button (Toggle)
+  g_mode_btn = ui_header_add_action_btn(header, LV_SYMBOL_EDIT, on_edit_clicked, NULL);
 
   // 3. List
   g_call_log_list = lv_obj_create(applet->screen);
   lv_obj_set_width(g_call_log_list, LV_PCT(100)); // Full width
   lv_obj_set_flex_grow(g_call_log_list, 1); 
+  lv_obj_set_flex_flow(g_call_log_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(g_call_log_list, 0, 0);
+  lv_obj_set_style_border_width(g_call_log_list, 0, 0);
+
+  // Floating Trash Button (Created AFTER list for Z-Index)
+  g_log_trash_btn = lv_btn_create(applet->screen);
+  lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_FLOATING);
+  lv_obj_set_size(g_log_trash_btn, 60, 60);
+  lv_obj_align(g_log_trash_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_set_style_radius(g_log_trash_btn, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(g_log_trash_btn, lv_palette_main(LV_PALETTE_RED), 0);
+  lv_obj_set_style_shadow_width(g_log_trash_btn, 10, 0);
+  lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN); // Hidden by default
+  
+  lv_obj_t *trash_icon = lv_label_create(g_log_trash_btn);
+  lv_label_set_text(trash_icon, LV_SYMBOL_TRASH);
+  lv_obj_set_style_text_font(trash_icon, &lv_font_montserrat_24, 0);
+  lv_obj_center(trash_icon);
+  
+  lv_obj_add_event_cb(g_log_trash_btn, on_trash_clicked, LV_EVENT_CLICKED, NULL);
+
+  // Initial Population
+  populate_log_list();
   
   // Match Padding with Header (approx)
   lv_obj_set_style_pad_left(g_call_log_list, 15, 0);

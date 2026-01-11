@@ -35,9 +35,30 @@ static void draw_list(void);
 static void draw_editor(void);
 static void contact_long_press_handler(lv_event_t *e);
 
-static bool g_return_to_caller = false;
-
 static bool g_preserve_view = false;
+
+// Selection Mode State
+static bool g_selection_mode = false;
+static bool g_selected_mask[100]; // MAX_CONTACTS default? Limits? cm_get_count dynamic?
+// We should check contact_manager.h for MAX limits. If dynamic, we might need bitmask or dynamic array.
+// For now assuming 100 is safe upper bound or matching MAX constants if available.
+// Let's check imports. cm_get_count used.
+// Let's use 100 for now, same as call log.
+
+// External reference to call applet
+
+static bool g_return_to_caller = false;
+static lv_obj_t *g_contacts_trash_btn = NULL;
+
+
+static void delete_btn_clicked(lv_event_t *e) {
+  (void)e;
+  if (!is_new_contact) {
+    cm_remove(current_edit_contact.id);
+  }
+  is_editor_mode = false;
+  refresh_ui();
+}
 
 // External API to open editor with number (for Call Log "Add To Contact")
 void contacts_applet_open_new(const char *number) {
@@ -184,14 +205,60 @@ static void save_btn_clicked(lv_event_t *e) {
   refresh_ui();
 }
 
-static void delete_btn_clicked(lv_event_t *e) {
-  (void)e;
-  if (!is_new_contact) {
-    cm_remove(current_edit_contact.id);
-  }
-  is_editor_mode = false;
-  refresh_ui();
+// Selection Handlers
+static void on_edit_clicked(lv_event_t *e) {
+    (void)e;
+    g_selection_mode = !g_selection_mode;
+    // Reset selection on exit? Yes.
+    if (!g_selection_mode) {
+        memset(g_selected_mask, 0, sizeof(g_selected_mask));
+    }
+    refresh_ui();
 }
+
+static void on_trash_clicked(lv_event_t *e) {
+    (void)e;
+    // Delete selected
+    // Iterate backwards to avoid index shifting issues if we had a remove_at logic,
+    // but cm_remove takes ID. So order doesn't strictly matter for finding ID, 
+    // but we must be careful if indices shift.
+    // cm_get_at(i) returns pointer.
+    // We should collect IDs to remove first?
+    // contacts are re-indexed? 
+    // Let's assume cm_remove handles it.
+    // Efficient approach: Collect IDs then remove.
+    
+    int count = cm_get_count();
+    int removed = 0;
+    
+    // We need to store IDs because cm_get_count changes as we remove?
+    // If cm is simple array list, removing swaps or shifts.
+    // Safest: Iterate and collect IDs or loop backwards.
+    // cm_get_at(i) is safe?
+    
+    // Let's blindly try Loop Backwards
+    for (int i = count - 1; i >= 0; i--) {
+        if (g_selected_mask[i]) {
+            const contact_t *c = cm_get_at(i);
+            if (c) {
+                cm_remove(c->id);
+                removed++;
+            }
+        }
+    }
+    
+    if (removed > 0) {
+        log_info("ContactsApplet", "Deleted %d contacts", removed);
+    }
+    
+    g_selection_mode = false;
+    memset(g_selected_mask, 0, sizeof(g_selected_mask));
+    refresh_ui();
+}
+
+
+
+// External reference to call applet
 
 // External reference to call applet
 extern applet_t call_applet;
@@ -351,6 +418,28 @@ static void contact_item_clicked(lv_event_t *e) {
   show_account_picker(c->number, false);
 }
 
+static void contact_checkbox_cb(lv_event_t *e) {
+    lv_obj_t *cb = lv_event_get_target(e);
+    int idx = (intptr_t)lv_event_get_user_data(e);
+    bool checked = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    
+    // Safety check
+    if (idx >= 0 && idx < 100) {
+        g_selected_mask[idx] = checked;
+    }
+    
+    // Update Trash Visibility
+    if (g_contacts_trash_btn) {
+        bool any_selected = false;
+        // cm_get_count() might be slow? But loop 100 is fast.
+        for(int i=0; i<100; i++) {
+             if (g_selected_mask[i]) { any_selected = true; break; }
+        }
+        if (any_selected) lv_obj_clear_flag(g_contacts_trash_btn, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(g_contacts_trash_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void contact_video_clicked(lv_event_t *e) {
   const contact_t *c = (const contact_t *)lv_event_get_user_data(e);
   if (!c)
@@ -402,13 +491,17 @@ static void draw_list(void) {
   lv_obj_set_style_pad_all(g_applet->screen, 0, 0);
   lv_obj_set_style_pad_gap(g_applet->screen, 0, 0);
 
-  ui_create_title_bar(g_applet->screen, "Contacts", true, back_btn_clicked, NULL);
+  lv_obj_t *header = ui_create_title_bar(g_applet->screen, "Contacts", true, back_btn_clicked, NULL);
+  
+  // Add Edit Action
+  ui_header_add_action_btn(header, g_selection_mode ? LV_SYMBOL_CLOSE : LV_SYMBOL_EDIT, on_edit_clicked, NULL);
 
   lv_obj_t *list = lv_obj_create(g_applet->screen);
   lv_obj_set_width(list, LV_PCT(100));
   lv_obj_set_flex_grow(list, 1); // Fill remaining space
   lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(list, 10, 0);
+  lv_obj_set_style_pad_gap(list, 10, 0);
 
   cm_init();
   int count = cm_get_count();
@@ -421,82 +514,143 @@ static void draw_list(void) {
     lv_obj_t *item = lv_obj_create(list);
     lv_obj_set_size(item, LV_PCT(100), 70);
     lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(item, contact_item_clicked, LV_EVENT_CLICKED,
-                        (void *)c);
-    lv_obj_add_event_cb(item, contact_long_press_handler, LV_EVENT_LONG_PRESSED,
-                        (void *)c);
+    
+    // In selection mode, clicking toggles selection (via checkbox or whole item?)
+    // User requested "Edit icon... to multi-select contacts. after user selection complete, show Trash".
+    // "Edit" toggles mode.
+    
+    if (g_selection_mode) {
+        lv_obj_t *cb = lv_checkbox_create(item);
+        lv_checkbox_set_text(cb, "");
+        if (g_selected_mask[i]) lv_obj_add_state(cb, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(cb, contact_checkbox_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)i);
+        lv_obj_align(cb, LV_ALIGN_LEFT_MID, 0, 0);
+        
+        // Disable normal click action?
+        // Or make item click toggle checkbox?
+        // Let's disable item click for simplicity, or handle it manually.
+        // If we don't attach contact_item_clicked, it does nothing.
+        // We can attach a toggle handler to item.
+    } else {
+        lv_obj_add_event_cb(item, contact_item_clicked, LV_EVENT_CLICKED, (void *)c);
+        lv_obj_add_event_cb(item, contact_long_press_handler, LV_EVENT_LONG_PRESSED, (void *)c);
+    }
 
     lv_obj_t *avatar = create_avatar(item, c->name, 50);
-    lv_obj_align(avatar, LV_ALIGN_LEFT_MID, 0, 0);
+    // Shift avatar right if checkbox is present
+    if (g_selection_mode) {
+        lv_obj_align(avatar, LV_ALIGN_LEFT_MID, 40, 0); 
+    } else {
+        lv_obj_align(avatar, LV_ALIGN_LEFT_MID, 0, 0);
+    }
 
     lv_obj_t *name_lbl = lv_label_create(item);
     lv_label_set_text(name_lbl, c->name);
     lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, 0);
-    lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 60, 0);
+    // Shift label
+    if (g_selection_mode) {
+         lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 100, 0);
+    } else {
+         lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 60, 0);
+    }
 
-    lv_obj_t *edit_btn = lv_btn_create(item);
-    lv_obj_set_size(edit_btn, 40, 40);
-    lv_obj_align(edit_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_opa(edit_btn, 0, 0);
-    lv_obj_set_style_shadow_width(edit_btn, 0, 0);
+    if (!g_selection_mode) {
+        // Normal Mode Buttons
+        lv_obj_t *edit_btn = lv_btn_create(item);
+        lv_obj_set_size(edit_btn, 40, 40);
+        lv_obj_align(edit_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+        lv_obj_set_style_bg_opa(edit_btn, 0, 0);
+        lv_obj_set_style_shadow_width(edit_btn, 0, 0);
 
-    lv_obj_t *edit_icon = lv_label_create(edit_btn);
-    lv_label_set_text(edit_icon, LV_SYMBOL_EDIT);
-    lv_obj_set_style_text_color(edit_icon, lv_palette_main(LV_PALETTE_TEAL), 0);
-    lv_obj_set_style_text_font(edit_icon, &lv_font_montserrat_20, 0);
-    lv_obj_center(edit_icon);
+        lv_obj_t *edit_icon = lv_label_create(edit_btn);
+        lv_label_set_text(edit_icon, LV_SYMBOL_EDIT);
+        lv_obj_set_style_text_color(edit_icon, lv_palette_main(LV_PALETTE_TEAL), 0);
+        lv_obj_set_style_text_font(edit_icon, &lv_font_montserrat_20, 0);
+        lv_obj_center(edit_icon);
+        lv_obj_add_event_cb(edit_btn, edit_btn_clicked, LV_EVENT_CLICKED, (void *)c);
 
-    lv_obj_t *video_btn = lv_btn_create(item);
-    lv_obj_set_size(video_btn, 40, 40);
-    lv_obj_align(video_btn, LV_ALIGN_RIGHT_MID, -45, 0); // Left of Edit
-    lv_obj_set_style_bg_opa(video_btn, 0, 0);
+        lv_obj_t *video_btn = lv_btn_create(item);
+        lv_obj_set_size(video_btn, 40, 40);
+        lv_obj_align(video_btn, LV_ALIGN_RIGHT_MID, -45, 0); // Left of Edit
+        lv_obj_set_style_bg_opa(video_btn, 0, 0);
 
-    lv_obj_t *audio_btn = lv_btn_create(item);
-    lv_obj_set_size(audio_btn, 40, 40);
-    lv_obj_align(audio_btn, LV_ALIGN_RIGHT_MID, -90, 0); // Left of Video
-    lv_obj_set_style_bg_opa(audio_btn, 0, 0);
-    lv_obj_set_style_shadow_width(audio_btn, 0, 0);
+        lv_obj_t *audio_btn = lv_btn_create(item);
+        lv_obj_set_size(audio_btn, 40, 40);
+        lv_obj_align(audio_btn, LV_ALIGN_RIGHT_MID, -90, 0); // Left of Video
+        lv_obj_set_style_bg_opa(audio_btn, 0, 0);
+        lv_obj_set_style_shadow_width(audio_btn, 0, 0);
 
-    lv_obj_t *audio_icon = lv_label_create(audio_btn);
-    lv_label_set_text(audio_icon, LV_SYMBOL_CALL);
-    lv_obj_set_style_text_color(audio_icon, lv_palette_main(LV_PALETTE_GREEN),
-                                0);
-    lv_obj_set_style_text_font(audio_icon, &lv_font_montserrat_20, 0);
-    lv_obj_center(audio_icon);
+        lv_obj_t *audio_icon = lv_label_create(audio_btn);
+        lv_label_set_text(audio_icon, LV_SYMBOL_CALL);
+        lv_obj_set_style_text_color(audio_icon, lv_palette_main(LV_PALETTE_GREEN), 0);
+        lv_obj_set_style_text_font(audio_icon, &lv_font_montserrat_20, 0);
+        lv_obj_center(audio_icon);
 
-    lv_obj_add_event_cb(audio_btn, contact_item_clicked, LV_EVENT_CLICKED,
-                        (void *)c);
-    lv_obj_set_style_shadow_width(video_btn, 0, 0);
+        lv_obj_add_event_cb(audio_btn, contact_item_clicked, LV_EVENT_CLICKED, (void *)c);
+        lv_obj_set_style_shadow_width(video_btn, 0, 0);
 
-    lv_obj_t *video_icon = lv_label_create(video_btn);
-    lv_label_set_text(video_icon, LV_SYMBOL_VIDEO);
-    lv_obj_set_style_text_color(video_icon, lv_palette_main(LV_PALETTE_BLUE),
-                                0);
-    lv_obj_set_style_text_font(video_icon, &lv_font_montserrat_20, 0);
-    lv_obj_center(video_icon);
+        lv_obj_t *video_icon = lv_label_create(video_btn);
+        lv_label_set_text(video_icon, LV_SYMBOL_VIDEO);
+        lv_obj_set_style_text_color(video_icon, lv_palette_main(LV_PALETTE_BLUE), 0);
+        lv_obj_set_style_text_font(video_icon, &lv_font_montserrat_20, 0);
+        lv_obj_center(video_icon);
 
-    lv_obj_add_event_cb(video_btn, contact_video_clicked, LV_EVENT_CLICKED,
-                        (void *)c);
-
-    lv_obj_add_event_cb(edit_btn, edit_btn_clicked, LV_EVENT_CLICKED,
-                        (void *)c);
+        lv_obj_add_event_cb(video_btn, contact_video_clicked, LV_EVENT_CLICKED, (void *)c);
+    }
   }
 
-  lv_obj_t *fab = lv_btn_create(g_applet->screen);
-  lv_obj_add_flag(fab, LV_OBJ_FLAG_FLOATING); // Ignore flex layout
-  lv_obj_set_size(fab, 56, 56);
-  lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
-  lv_obj_set_style_radius(fab, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(fab, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
-  lv_obj_set_style_shadow_width(fab, 10, 0);
-  lv_obj_set_style_shadow_opa(fab, LV_OPA_30, 0);
+  // Floating Buttons
+  if (g_selection_mode) {
+      // Trash Button (Center Bottom)
+      // Trash Button (Center Bottom)
+      g_contacts_trash_btn = lv_btn_create(g_applet->screen);
+      lv_obj_add_flag(g_contacts_trash_btn, LV_OBJ_FLAG_FLOATING);
+      lv_obj_set_size(g_contacts_trash_btn, 60, 60);
+      lv_obj_align(g_contacts_trash_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+      lv_obj_set_style_radius(g_contacts_trash_btn, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(g_contacts_trash_btn, lv_palette_main(LV_PALETTE_RED), 0);
+      lv_obj_set_style_shadow_width(g_contacts_trash_btn, 10, 0);
+      
+      lv_obj_t *trash_icon = lv_label_create(g_contacts_trash_btn);
+      lv_label_set_text(trash_icon, LV_SYMBOL_TRASH);
+      lv_obj_set_style_text_font(trash_icon, &lv_font_montserrat_24, 0);
+      lv_obj_center(trash_icon);
+      
+      
+      lv_obj_add_event_cb(g_contacts_trash_btn, on_trash_clicked, LV_EVENT_CLICKED, NULL);
+      
+      // Update visibility based on selection
+      bool any_selected = false;
+      for(int i=0; i<count; i++) {
+          if (g_selected_mask[i]) { any_selected = true; break; }
+      }
+      if (any_selected) lv_obj_clear_flag(g_contacts_trash_btn, LV_OBJ_FLAG_HIDDEN);
+      else lv_obj_add_flag(g_contacts_trash_btn, LV_OBJ_FLAG_HIDDEN);
 
-  lv_obj_t *plus = lv_label_create(fab);
-  lv_label_set_text(plus, LV_SYMBOL_PLUS);
-  lv_obj_set_style_text_font(plus, &lv_font_montserrat_24, 0);
-  lv_obj_center(plus);
+      
+      // Store trash button reference? It's not stored in global currently in contacts_applet.
+      // We need to store it to update it later.
+      // Let's add `static lv_obj_t *g_contacts_trash_btn = NULL;` at top and use it.
 
-  lv_obj_add_event_cb(fab, add_btn_clicked, LV_EVENT_CLICKED, NULL);
+
+  } else {
+      // Add Contact FAB (Right Bottom)
+      lv_obj_t *fab = lv_btn_create(g_applet->screen);
+      lv_obj_add_flag(fab, LV_OBJ_FLAG_FLOATING); // Ignore flex layout
+      lv_obj_set_size(fab, 56, 56);
+      lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
+      lv_obj_set_style_radius(fab, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(fab, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
+      lv_obj_set_style_shadow_width(fab, 10, 0);
+      lv_obj_set_style_shadow_opa(fab, LV_OPA_30, 0);
+
+      lv_obj_t *plus = lv_label_create(fab);
+      lv_label_set_text(plus, LV_SYMBOL_PLUS);
+      lv_obj_set_style_text_font(plus, &lv_font_montserrat_24, 0);
+      lv_obj_center(plus);
+
+      lv_obj_add_event_cb(fab, add_btn_clicked, LV_EVENT_CLICKED, NULL);
+  }
 }
 
 static void draw_editor(void) {

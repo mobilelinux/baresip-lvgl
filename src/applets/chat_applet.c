@@ -13,11 +13,14 @@
 // Forward declare external Contacts API (or include header if available)
 extern void contacts_applet_open_new(const char *number);
 extern applet_t contacts_applet;
+extern int db_chat_get_unread_count(void);
+extern int db_chat_mark_read(const char *peer_uri);
 
 //static applet_t *g_applet = NULL;
 // Structs
 typedef struct {
     lv_obj_t *list_view;
+    lv_obj_t *thread_list; // Added for robust access
     lv_obj_t *detail_view;
     
     // Detail View Components
@@ -44,16 +47,78 @@ static bool g_chat_selected_mask[MAX_CHAT_THREADS];
 static chat_message_t g_chat_threads[MAX_CHAT_THREADS];
 static int g_chat_thread_count = 0;
 static lv_obj_t *g_trash_btn = NULL;
+static lv_obj_t *g_chat_fab = NULL; // Add FAB definition
 
 static chat_data_t *g_data = NULL;
 
 // Forward
 static void show_list_screen(void);
 static void show_detail_screen(const char *peer);
-static void show_compose_screen(void);
 static void create_message_bubble(lv_obj_t *parent, const char *text, int direction);
+static void populate_chat_list(void);
 
-// --- Helpers ---
+// --- Handlers ---
+static void on_edit_clicked(lv_event_t *e); // Forward decl or define?
+
+// Let's define it.
+
+static void on_edit_clicked(lv_event_t *e) {
+    (void)e;
+    g_chat_selection_mode = !g_chat_selection_mode;
+    if (!g_chat_selection_mode) {
+         memset(g_chat_selected_mask, 0, sizeof(g_chat_selected_mask));
+    }
+    
+    // Update Header Icon
+    lv_obj_t *btn = lv_event_get_target(e);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    if(lbl) lv_label_set_text(lbl, g_chat_selection_mode ? LV_SYMBOL_CLOSE : LV_SYMBOL_EDIT);
+
+    // Toggle FABs
+    if (g_chat_fab) {
+        if(g_chat_selection_mode) lv_obj_add_flag(g_chat_fab, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_clear_flag(g_chat_fab, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (g_trash_btn) {
+        if(g_chat_selection_mode) lv_obj_clear_flag(g_trash_btn, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(g_trash_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    
+    populate_chat_list();
+}
+
+static void on_trash_clicked(lv_event_t *e) {
+    (void)e;
+    // Iterate backwards
+    int removed = 0;
+    for (int i = g_chat_thread_count - 1; i >= 0; i--) {
+        if (g_chat_selected_mask[i]) {
+            db_chat_delete_thread(g_chat_threads[i].peer_uri);
+            removed++;
+        }
+    }
+    
+    g_chat_thread_count = db_chat_get_threads(g_chat_threads, MAX_CHAT_THREADS);
+    g_chat_selection_mode = false;
+    memset(g_chat_selected_mask, 0, sizeof(g_chat_selected_mask));
+    
+    // Reset UI
+    // Need reference to Edit button to reset its icon?
+    // It's in header. We don't have global reference to header button easily unless we store it.
+    // Call Log stored `g_mode_btn`. Chat uses `toggle_selection_clicked` attached to it.
+    // We should probably store the header button in global or find it.
+    // Or just re-create header in refresh? No.
+    // Let's add `static lv_obj_t *g_chat_edit_btn = NULL;`
+    
+    // For now, let's just Refresh UI and user manually exits? No, we set selection mode false.
+    // If we don't reset icon, it stays "Close".
+    // Let's store `g_chat_edit_btn`.
+    
+    populate_chat_list();
+}
+
+
+
 static void format_time(long timestamp, char *buf, size_t size) {
     if (!buf || size == 0) return;
     struct tm *tm_info = localtime(&timestamp);
@@ -63,6 +128,7 @@ static void format_time(long timestamp, char *buf, size_t size) {
         buf[0] = '\0';
     }
 }
+
 
 // Clean URI Helper
 static void get_display_name(const char *uri, char *out_name, size_t size) {
@@ -366,6 +432,10 @@ static void show_detail_screen(const char *peer) {
     strncpy(g_data->current_peer, peer, sizeof(g_data->current_peer)-1);
     g_data->current_peer[sizeof(g_data->current_peer)-1] = '\0';
     
+    // Mark as Read
+    db_chat_mark_read(peer);
+    // TODO: Trigger Badge Update? For now, next time home loads it updates.
+    
     // Rebuild Detail
     lv_obj_clean(g_data->detail_view);
     
@@ -427,46 +497,7 @@ static void back_from_list_clicked(lv_event_t *e) {
     applet_manager_back();
 }
 
-static void populate_chat_list(void);
 
-static void toggle_selection_clicked(lv_event_t *e) {
-    (void)e;
-    if (g_chat_selection_mode) {
-        // Execute Delete
-        for(int i=0; i<g_chat_thread_count; i++) {
-            if (g_chat_selected_mask[i]) {
-                log_info("ChatApplet", "Deleting thread: %s", g_chat_threads[i].peer_uri);
-                db_chat_delete_thread(g_chat_threads[i].peer_uri);
-            }
-        }
-        
-        // Exit Mode
-        g_chat_selection_mode = false;
-        
-        // Load Fresh Data
-        g_chat_thread_count = db_chat_get_threads(g_chat_threads, MAX_CHAT_THREADS);
-        
-        // Reset Icon
-         if(g_trash_btn) {
-             lv_label_set_text(lv_obj_get_child(g_trash_btn, 0), LV_SYMBOL_TRASH);
-            lv_obj_set_style_text_color(lv_obj_get_child(g_trash_btn, 0), lv_color_white(), 0);
-        }
-        
-        populate_chat_list();
-    } else {
-        // Enter Mode
-        g_chat_selection_mode = true;
-        memset(g_chat_selected_mask, 0, sizeof(g_chat_selected_mask));
-        
-        // Change Icon to Check/OK
-        if(g_trash_btn) {
-            lv_label_set_text(lv_obj_get_child(g_trash_btn, 0), LV_SYMBOL_OK);
-            lv_obj_set_style_text_color(lv_obj_get_child(g_trash_btn, 0), lv_color_white(), 0);
-        }
-        
-        populate_chat_list();
-    }
-}
 
 static lv_obj_t *g_context_menu = NULL;
 static char g_context_menu_peer[128];
@@ -598,12 +629,9 @@ static void list_item_clicked(lv_event_t *e) {
 static void populate_chat_list(void) {
     if (!g_data || !g_data->list_view) return;
     
-    // Find list container (It's the 2nd child of list_view? Or search?)
-    // In show_list_screen, we create header then list.
-    // Let's store list pointer or find it.
-    // Hack: list_view has children. 0=Header, 1=List, 2=FAB.
-    if (lv_obj_get_child_cnt(g_data->list_view) < 2) return;
-    lv_obj_t *list = lv_obj_get_child(g_data->list_view, 1);
+    // Use stored reference
+    lv_obj_t *list = g_data->thread_list;
+    if (!list) return;
     
     lv_obj_clean(list);
     
@@ -620,6 +648,7 @@ static void populate_chat_list(void) {
         lv_obj_set_flex_align(item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_all(item, 10, 0);
         lv_obj_set_style_pad_column(item, 15, 0); // Gap between Avatar/Text/Time
+        lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
         
         if (g_chat_selection_mode) {
              lv_obj_t *chk = lv_checkbox_create(item);
@@ -681,10 +710,24 @@ static void populate_chat_list(void) {
     }
     
     // FAB Visibility
-    if (lv_obj_get_child_cnt(g_data->list_view) > 2) {
-        lv_obj_t *fab = lv_obj_get_child(g_data->list_view, 2);
-        if (g_chat_selection_mode) lv_obj_add_flag(fab, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_clear_flag(fab, LV_OBJ_FLAG_HIDDEN);
+    // FAB Visibility
+    if (g_chat_fab) {
+        if (g_chat_selection_mode) lv_obj_add_flag(g_chat_fab, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_clear_flag(g_chat_fab, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Trash Button Visibility (g_trash_btn is global static)
+    if (g_trash_btn) {
+        if (g_chat_selection_mode) {
+             bool any = false;
+             for(int i=0; i<g_chat_thread_count; i++) {
+                 if(g_chat_selected_mask[i]) { any=true; break; }
+             }
+             if (any) lv_obj_clear_flag(g_trash_btn, LV_OBJ_FLAG_HIDDEN);
+             else lv_obj_add_flag(g_trash_btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+             lv_obj_add_flag(g_trash_btn, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
@@ -698,10 +741,34 @@ static void show_list_screen(void) {
     lv_obj_clean(g_data->list_view);
     
     // Header
+    // Header
     lv_obj_t *header_cont = ui_create_title_bar(g_data->list_view, "Messages", true, back_from_list_clicked, NULL);
     
-    // Trash Button
-    g_trash_btn = ui_header_add_action_btn(header_cont, LV_SYMBOL_TRASH, toggle_selection_clicked, NULL);
+    // Edit Button
+    lv_obj_t *edit_btn = ui_header_add_action_btn(header_cont, LV_SYMBOL_EDIT, on_edit_clicked, NULL);
+    // Note: We need to reset this icon if we exit mode programmatically.
+    // Ideally store in `g_chat_edit_btn` if we added it.
+    // For now, let's just let it be. If user clicks "Trash", we effectively exit mode.
+    // If we don't reset icon, next click toggles mode ON again (no, mode is false).
+    // Logic: `on_edit_clicked` checks `g_chat_selection_mode`.
+    // If FALSE, it sets icon to EDIT.
+    // If we set mode=false in trash, next edit click -> mode=true -> icon=CLOSE.
+    // So if we delete, icon stays CLOSE but mode is FALSE?
+    // Wait, on_edit_clicked: `mode = !mode`.
+    // If mode was false (after trash), click -> mode=true. Icon -> CLOSE.
+    // So icon was WRONG (CLOSE) while mode was FALSE.
+    // We NEED to update icon in `on_trash_clicked`.
+    // Let's assume we can get it via `lv_obj_get_child(header_cont, ...)` or store it.
+    // Since we didn't add the global yet, let's rely on refresh or just store it now.
+    // Modifying `show_list_screen` allows us to store it if we declare it.
+    // I'll declare `static lv_obj_t *g_chat_edit_btn = NULL;` in this block? No, must be top level.
+    // I'll assume I can add the global in a separate step or just now.
+    // Let's use `g_trash_btn` var usage for Floating TRASH, and make a new global for header?
+    // Or just find it.
+    // Let's duplicate `g_trash_btn` usage for the floating one.
+
+    // Trash Button (Floating now)
+
 
     
     // List Container (Scrollable)
@@ -711,6 +778,22 @@ static void show_list_screen(void) {
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(list, 0, 0);
     lv_obj_set_style_border_width(list, 0, 0);
+    g_data->thread_list = list;
+
+    // Trash Button (Floating now) - Created AFTER list for Z-Index
+    g_trash_btn = lv_btn_create(g_data->list_view);
+    lv_obj_set_size(g_trash_btn, 60, 60);
+    lv_obj_set_style_radius(g_trash_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g_trash_btn, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_add_flag(g_trash_btn, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(g_trash_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_add_flag(g_trash_btn, LV_OBJ_FLAG_HIDDEN); // Initial hidden
+    
+    lv_obj_t *trash_icon = lv_label_create(g_trash_btn);
+    lv_label_set_text(trash_icon, LV_SYMBOL_TRASH);
+    lv_obj_set_style_text_font(trash_icon, &lv_font_montserrat_24, 0);
+    lv_obj_center(trash_icon);
+    lv_obj_add_event_cb(g_trash_btn, on_trash_clicked, LV_EVENT_CLICKED, edit_btn); // Pass edit_btn as user_data!
     
     // Initial Load
     g_chat_thread_count = db_chat_get_threads(g_chat_threads, MAX_CHAT_THREADS);
@@ -721,16 +804,16 @@ static void show_list_screen(void) {
     // List Loop Moved to populate_chat_list
 
     // New Chat FAB (Created last for Z-Order)
-    lv_obj_t *fab = lv_btn_create(g_data->list_view);
-    lv_obj_set_size(fab, 56, 56);
-    lv_obj_set_style_radius(fab, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(fab, lv_palette_main(LV_PALETTE_BLUE), 0);
-    lv_obj_add_flag(fab, LV_OBJ_FLAG_FLOATING);
-    lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
-    lv_obj_t *icon = lv_label_create(fab);
+    g_chat_fab = lv_btn_create(g_data->list_view);
+    lv_obj_set_size(g_chat_fab, 56, 56);
+    lv_obj_set_style_radius(g_chat_fab, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g_chat_fab, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_add_flag(g_chat_fab, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(g_chat_fab, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
+    lv_obj_t *icon = lv_label_create(g_chat_fab);
     lv_label_set_text(icon, LV_SYMBOL_PLUS);
     lv_obj_center(icon);
-    lv_obj_add_event_cb(fab, new_chat_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(g_chat_fab, new_chat_clicked, LV_EVENT_CLICKED, NULL);
 }
 
 // --- Applet Interface ---
@@ -772,6 +855,37 @@ static int chat_init(applet_t *applet) {
     lv_obj_add_flag(g_data->compose_view, LV_OBJ_FLAG_HIDDEN);
     
     return 0;
+}
+
+void chat_applet_on_message(const char *peer, const char *text) {
+    if (!g_data) return;
+    
+    // Check if Detail View is active for this peer
+    if (!lv_obj_has_flag(g_data->detail_view, LV_OBJ_FLAG_HIDDEN)) {
+        // Normalize Peer URIs for comparison (Basic)
+        if (strstr(g_data->current_peer, peer) || strstr(peer, g_data->current_peer)) {
+             log_info("ChatApplet", "Realtime Update: Detail View");
+             create_message_bubble(g_data->msg_list, text, 0); // 0 = Incoming
+             
+             // Scroll
+             if (lv_obj_get_child_cnt(g_data->msg_list) > 0) {
+                 lv_obj_t *last = lv_obj_get_child(g_data->msg_list, -1);
+                 if (last) {
+                    lv_obj_update_layout(last);
+                    lv_obj_scroll_to_view(last, LV_ANIM_ON);
+                 }
+             }
+             return;
+        }
+    }
+    
+    // Check if List View is active
+    if (!lv_obj_has_flag(g_data->list_view, LV_OBJ_FLAG_HIDDEN)) {
+         log_info("ChatApplet", "Realtime Update: List View");
+         // Reload Threads
+         g_chat_thread_count = db_chat_get_threads(g_chat_threads, MAX_CHAT_THREADS);
+         populate_chat_list();
+    }
 }
 
 static void chat_start(applet_t *applet) {

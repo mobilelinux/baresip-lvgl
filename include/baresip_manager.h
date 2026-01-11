@@ -40,6 +40,10 @@ void baresip_manager_mute(bool mute);
 bool baresip_manager_is_muted(void);
 int baresip_manager_add_account(const voip_account_t *account);
 int baresip_manager_account_register(const char *aor);
+int baresip_manager_account_register_simple(const char *user, const char *domain);
+int baresip_manager_send_message(const char *peer_uri, const char *text);
+void baresip_manager_get_current_call_display_name(char *out_buf, size_t size);
+void baresip_manager_set_video_objects(void *remote_obj, void *local_obj);
 void baresip_manager_destroy(void);
 
 /**

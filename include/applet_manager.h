@@ -47,6 +47,16 @@ int applet_manager_register(applet_t *applet);
 int applet_manager_launch(const char *name);
 
 /**
+ * Get an applet by name
+ * @param name The name of the applet
+ * @return Pointer to applet applet or NULL
+ */
+applet_t *applet_manager_get_applet(const char *name);
+
+/**
+ * Launch an applet by name
+
+/**
  * Launch an applet by pointer
  * @param applet The applet to launch
  * @return 0 on success, negative on error

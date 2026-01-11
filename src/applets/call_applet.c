@@ -402,7 +402,12 @@ static void reg_status_callback(const char *aor, reg_status_t status) {
 }
 
 
+extern int db_call_mark_all_viewed(void);
+
 static void show_dialer_screen(call_data_t *data) {
+  // Clear Missed Call Badge
+  db_call_mark_all_viewed();
+
   lv_obj_clear_flag(data->dialer_screen, LV_OBJ_FLAG_HIDDEN);
   if (data->active_call_screen)
     lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_HIDDEN);
@@ -487,7 +492,7 @@ static void show_active_call_screen(call_data_t *data, const char *number,
   if (data->call_main_area) {
     if (incoming) {
       lv_obj_set_style_bg_opa(data->call_main_area, LV_OPA_COVER, 0);
-      lv_obj_set_style_bg_color(data->call_main_area, lv_color_black(), 0);
+      lv_obj_set_style_bg_color(data->call_main_area, lv_color_hex(0x1E1E1E), 0);
     } else {
       lv_obj_set_style_bg_opa(data->call_main_area, LV_OPA_TRANSP, 0);
     }
@@ -1051,6 +1056,19 @@ void update_call_duration(lv_timer_t *timer) {
   }
 
   if (valid_count == 0) {
+    // Grace period for INCOMING state (Event 36 race condition)
+    if (data->current_state == CALL_STATE_INCOMING || baresip_manager_get_state() == CALL_STATE_INCOMING) {
+         uint32_t elapsed_ms = lv_tick_elaps(data->call_start_time);
+         if (elapsed_ms < 5000) { // 5s grace
+             static uint32_t last_log = 0;
+             if (lv_tick_elaps(last_log) > 1000) {
+                 log_info("CallApplet", "Watchdog: Waiting for Call Object (Grace: %d ms)", elapsed_ms);
+                 last_log = lv_tick_get();
+             }
+             return;
+         }
+    }
+
     log_warn("CallApplet", "Watchdog: No valid calls found in "
                            "timer! Forcing exit.");
     if (applet_manager_back() != 0) {
@@ -1514,12 +1532,12 @@ void update_video_geometry(lv_timer_t *timer) {
   // Convert to SDL generic rect
   int w = coords.x2 - coords.x1 + 1;
   int h = coords.y2 - coords.y1 + 1;
-  static int log_div_geom = 0;
-  if (log_div_geom++ % 10 == 0) {
-    log_info("CallApplet", "Video Geometry: %d,%d %dx%d (Hidden: %d)",
-             coords.x1, coords.y1, w, h,
-             lv_obj_has_flag(data->video_cont, LV_OBJ_FLAG_HIDDEN));
-  }
+  // static int log_div_geom = 0;
+  // if (log_div_geom++ % 10 == 0) {
+  //   log_info("CallApplet", "Video Geometry: %d,%d %dx%d (Hidden: %d)",
+  //            coords.x1, coords.y1, w, h,
+  //            lv_obj_has_flag(data->video_cont, LV_OBJ_FLAG_HIDDEN));
+  // }
   // Only update if changed or periodically to be safe
   baresip_manager_set_video_rect(coords.x1, coords.y1, w, h);
 
@@ -1528,11 +1546,11 @@ void update_video_geometry(lv_timer_t *timer) {
     lv_obj_get_coords(data->video_local, &coords);
     int lw = coords.x2 - coords.x1 + 1;
     int lh = coords.y2 - coords.y1 + 1;
-    static int log_div_loc = 0;
-    if (log_div_loc++ % 10 == 0) {
-      log_info("CallApplet", "Local Video Geometry: %d,%d %dx%d", coords.x1,
-               coords.y1, lw, lh);
-    }
+    // static int log_div_loc = 0;
+    // if (log_div_loc++ % 10 == 0) {
+    //   log_info("CallApplet", "Local Video Geometry: %d,%d %dx%d", coords.x1,
+    //            coords.y1, lw, lh);
+    // }
     baresip_manager_set_local_video_rect(coords.x1, coords.y1, lw, lh);
   }
 }
@@ -2438,10 +2456,19 @@ static void call_resume(applet_t *applet) {
         update_call_list(data, NULL);
       }
     } else {
-      log_warn("CallApplet",
-               "No matching call found for mode %d, defaulting to Dialer",
-               g_req_view_mode);
-      show_dialer_screen(data);
+      // Fallback: If no matching call in list, but state IS Incoming, show screen anyway (Wait for object)
+      // This prevents the "Dialer Flash"
+      if (g_req_view_mode == VIEW_MODE_INCOMING && baresip_manager_get_state() == CALL_STATE_INCOMING) {
+          log_info("CallApplet", "Resume: Pre-emptive Incoming View (Call object pending)");
+          data->current_state = CALL_STATE_INCOMING;
+          strncpy(data->current_peer_uri, "Incoming...", sizeof(data->current_peer_uri)-1); // Placeholder
+          show_active_call_screen(data, data->current_peer_uri, true);
+      } else {
+          log_warn("CallApplet",
+                   "No matching call found for mode %d, defaulting to Dialer",
+                   g_req_view_mode);
+          show_dialer_screen(data);
+      }
     }
 
     g_req_view_mode = VIEW_MODE_NONE;
