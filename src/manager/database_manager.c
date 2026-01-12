@@ -42,14 +42,14 @@ int db_init(void) {
   sqlite3_exec(g_db, "ALTER TABLE contacts ADD COLUMN is_favorite INTEGER DEFAULT 0;", NULL, NULL, NULL);
 
   // Create Call Log
-  rc = sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS call_log (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, number TEXT, type INTEGER, timestamp INTEGER, account_aor TEXT, viewed INTEGER DEFAULT 0);", NULL, NULL, &errmsg);
+  rc = sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS call_log (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, number TEXT, type INTEGER, timestamp INTEGER, account_aor TEXT, is_read INTEGER DEFAULT 0);", NULL, NULL, &errmsg);
   if (rc != SQLITE_OK) {
       log_error("DatabaseManager", "Failed to create call_log table: %s", errmsg);
       sqlite3_free(errmsg);
   }
   
-  // Migration: Add viewed column if missing
-  sqlite3_exec(g_db, "ALTER TABLE call_log ADD COLUMN viewed INTEGER DEFAULT 0;", NULL, NULL, NULL);
+  // Migration: Add is_read if missing
+  sqlite3_exec(g_db, "ALTER TABLE call_log ADD COLUMN is_read INTEGER DEFAULT 0;", NULL, NULL, NULL);
 
   // Migration: Fix number
   sqlite3_exec(g_db, "UPDATE contacts SET number = 'sip:808086@fanvil.com' WHERE number = 'sip:8080866@fanvil.com';", NULL, NULL, NULL);
@@ -253,8 +253,6 @@ int db_chat_get_threads(chat_message_t *threads, int max_count) {
         return 0;
     }
     
-    printf("DEBUG_STEP: db_chat_get_threads: Getting max %d threads...\n", max_count);
-
     // Get last message for each unique peer
     const char *sql = "SELECT peer_uri, content, timestamp, direction FROM chat_messages "
                       "WHERE id IN (SELECT MAX(id) FROM chat_messages GROUP BY peer_uri) "
@@ -262,7 +260,6 @@ int db_chat_get_threads(chat_message_t *threads, int max_count) {
                      
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        printf("DEBUG_STEP: db_chat_get_threads: Prepare failed: %s\n", sqlite3_errmsg(g_db));
         pthread_mutex_unlock(&g_db_mutex);
         return 0;
     }
@@ -282,13 +279,10 @@ int db_chat_get_threads(chat_message_t *threads, int max_count) {
         m->timestamp = (long)sqlite3_column_int64(stmt, 2);
         m->direction = sqlite3_column_int(stmt, 3);
         
-        printf("DEBUG_STEP: db_chat_get_threads: Found thread [%d]: %s (%s)\n", count, m->peer_uri, m->content);
-        
         count++;
     }
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&g_db_mutex);
-    printf("DEBUG_STEP: db_chat_get_threads: Returning %d threads.\n", count);
     return count;
 }
 
@@ -394,93 +388,60 @@ int db_chat_bump_thread(const char *peer_uri) {
     return 0;
 }
 
-int db_chat_get_unread_count(void) {
+// --- Notification APIs ---
+
+int db_get_unread_comp_count(int *missed_calls, int *unread_msgs) {
+    if (!g_db) return -1;
     pthread_mutex_lock(&g_db_mutex);
-    if (!g_db) {
-        pthread_mutex_unlock(&g_db_mutex);
-        return 0;
-    }
-    
-    // Count status=0 messages that are Incoming (direction=0)
-    const char *sql = "SELECT COUNT(*) FROM chat_messages WHERE status = 0 AND direction = 0;";
-    
+
+    // Missed Calls: type=2 (CALL_TYPE_MISSED) and is_read=0
     sqlite3_stmt *stmt;
-    int count = 0;
-    
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    const char *sql_calls = "SELECT COUNT(*) FROM call_log WHERE type=2 AND is_read=0;";
+    if (sqlite3_prepare_v2(g_db, sql_calls, -1, &stmt, NULL) == SQLITE_OK) {
         if (sqlite3_step(stmt) == SQLITE_ROW) {
-            count = sqlite3_column_int(stmt, 0);
+            if (missed_calls) *missed_calls = sqlite3_column_int(stmt, 0);
         }
         sqlite3_finalize(stmt);
     }
-    
-    pthread_mutex_unlock(&g_db_mutex);
-    return count;
-}
 
-int db_chat_mark_read(const char *peer_uri) {
-    if (!peer_uri) return -1;
-    pthread_mutex_lock(&g_db_mutex);
-    if (!g_db) {
-        pthread_mutex_unlock(&g_db_mutex);
-        return -1;
+    // Unread Messages: direction=0 (Incoming) and status=0 (Unread)
+    // Note: status column exists in chat_messages
+    const char *sql_msgs = "SELECT COUNT(*) FROM chat_messages WHERE direction=0 AND status=0;";
+    if (sqlite3_prepare_v2(g_db, sql_msgs, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (unread_msgs) *unread_msgs = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
     }
-    
-    const char *sql = "UPDATE chat_messages SET status = 1 WHERE peer_uri = ? AND direction = 0;";
-    
-    sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        pthread_mutex_unlock(&g_db_mutex);
-        return -1;
-    }
-    
-    sqlite3_bind_text(stmt, 1, peer_uri, -1, SQLITE_STATIC);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    
+
     pthread_mutex_unlock(&g_db_mutex);
     return 0;
 }
 
-int db_call_get_missed_count(void) {
+int db_mark_missed_calls_read(void) {
+    if (!g_db) return -1;
     pthread_mutex_lock(&g_db_mutex);
-    if (!g_db) {
-        pthread_mutex_unlock(&g_db_mutex);
-        return 0;
-    }
-    
-    // Count type=2 (MISSED) and viewed=0
-    const char *sql = "SELECT COUNT(*) FROM call_log WHERE type = 2 AND viewed = 0;";
-    
-    sqlite3_stmt *stmt;
-    int count = 0;
-    
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            count = sqlite3_column_int(stmt, 0);
-        }
-        sqlite3_finalize(stmt);
-    }
-    
+    // Set is_read=1 for all missed calls (type=2)
+    const char *sql = "UPDATE call_log SET is_read=1 WHERE type=2 AND is_read=0;";
+    sqlite3_exec(g_db, sql, NULL, NULL, NULL);
     pthread_mutex_unlock(&g_db_mutex);
-    return count;
+    return 0;
 }
 
-int db_call_mark_all_viewed(void) {
+int db_mark_chat_read(const char *peer_uri) {
+    if (!g_db || !peer_uri) return -1;
     pthread_mutex_lock(&g_db_mutex);
-    if (!g_db) {
-        pthread_mutex_unlock(&g_db_mutex);
-        return -1;
-    }
     
-    const char *sql = "UPDATE call_log SET viewed = 1 WHERE viewed = 0;";
-    char *errmsg = NULL;
-    int rc = sqlite3_exec(g_db, sql, NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        log_error("DatabaseManager", "Failed to mark calls viewed: %s", errmsg);
-        sqlite3_free(errmsg);
+    // Normalize URI if needed, but strict match is safer for now if applet uses consistent URIs
+    // Using a simple LIKE or exact match? Exact match preferred if applet ensures consistency.
+    // The chat applet uses peer_uri from DB, so it should match.
+    const char *sql = "UPDATE chat_messages SET status=1 WHERE peer_uri=? AND direction=0 AND status=0;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, peer_uri, -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
     }
-    
     pthread_mutex_unlock(&g_db_mutex);
     return 0;
 }

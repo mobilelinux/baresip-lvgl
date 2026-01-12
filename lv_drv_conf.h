@@ -15,13 +15,18 @@
 /*-------------------
  *  SDL
  *-------------------*/
+/*-------------------
+ *  SDL
+ *-------------------*/
 #ifndef USE_SDL
 #  define USE_SDL         1
+#endif
+
+#if USE_SDL
 #  define SDL_HOR_RES     800
 #  define SDL_VER_RES     600
 #  define SDL_ZOOM        1
 #endif
-
 
 /*-------------------
  *  Linux frame buffer device (/dev/fbx)

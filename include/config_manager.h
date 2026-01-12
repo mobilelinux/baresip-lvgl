@@ -76,6 +76,7 @@ typedef struct {
   int video_frame_size; // 0=1280x720 (Default)
   audio_codec_t preferred_codec;
   int log_level;
+  bool show_favorites;
 
   // Account
   int default_account_index;

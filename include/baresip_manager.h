@@ -1,13 +1,13 @@
 #ifndef BARESIP_MANAGER_H
 #define BARESIP_MANAGER_H
 
-#include "config_manager.h"
-#include <re.h>
-#include <baresip.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <re.h>
+#include <baresip.h>
+#include "config_manager.h"
 
 typedef enum {
   REG_STATUS_NONE = 0,
@@ -20,10 +20,12 @@ typedef enum {
 typedef void (*call_event_cb)(enum call_state state, const char *peer_uri,
                               void *call_id);
 typedef void (*reg_event_cb)(const char *aor, reg_status_t status);
+typedef void (*message_event_cb)(const char *peer_uri, const char *text);
 
 int baresip_manager_init(void);
 void baresip_manager_set_callback(call_event_cb cb);
 void baresip_manager_set_reg_callback(reg_event_cb cb);
+void baresip_manager_set_message_callback(message_event_cb cb);
 reg_status_t baresip_manager_get_account_status(const char *aor);
 int baresip_manager_call(const char *uri);
 int baresip_manager_call_with_account(const char *uri, const char *account_aor);

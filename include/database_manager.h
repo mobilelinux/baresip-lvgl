@@ -39,4 +39,9 @@ int db_chat_get_history(const char *peer_uri, chat_message_t *messages, int max_
 int db_chat_delete_thread(const char *peer_uri);
 int db_chat_bump_thread(const char *peer_uri);
 
+// Notification API
+int db_get_unread_comp_count(int *missed_calls, int *unread_msgs);
+int db_mark_missed_calls_read(void);
+int db_mark_chat_read(const char *peer_uri);
+
 #endif // DATABASE_MANAGER_H

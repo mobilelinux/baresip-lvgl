@@ -55,7 +55,7 @@ applet_t *applet_manager_get_applet(const char *name);
 
 /**
  * Launch an applet by name
-
+ */
 /**
  * Launch an applet by pointer
  * @param applet The applet to launch

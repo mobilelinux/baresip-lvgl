@@ -1,69 +1,64 @@
 # baresip-lvgl
 
-An advanced embedded SIP Softphone application for Linux/ARM platforms, combining the robust [Baresip](https://github.com/baresip/baresip) SIP stack with a modern [LVGL](https://lvgl.io) touch user interface.
-
-![Status](https://img.shields.io/badge/status-active-success)
-![License](https://img.shields.io/badge/license-BSD-blue)
+An embedded SIP Softphone application for ARM platforms using [Baresip](https://github.com/baresip/baresip) and [LVGL](https://lvgl.io).
 
 ## Features
+- **SIP Telephony**: Make and receive VoIP calls using Baresip.
+- **Touch UI**: Responsive interface built with LVGL (Light and Versatile Graphics Library).
+- **Video Calls**: Support for raw video stream display (via SDL or FBDEV).
+- **History & Contacts**: SQLite-backed call history and contact management.
+- **Applet-based Architecture**: Modular design with independent applets:
+    - **Home**: Dashboard with status and quick actions.
+    - **Dialer**: Keypad for making calls.
+    - **Contacts**: Address book management.
+    - **History**: Call logs (Incoming, Outgoing, Missed).
+    - **Settings**: Configuration for Accounts, Audio, and System.
+    - **Chat**: Instant messaging.
+- **Hardware Support**: Optimized for ARM VersatilePB (QEMU) with Framebuffer output.
 
-### Core Telephony
-- **Voice & Video Calls**: Full support for SIP voice and video calls using `g711`, `opus`, `h264` (via ffmpeg/avcodec), and more.
-- **Conferencing**: Basic support for audio handling.
-- **DTMF**: In-call keypad for DTMF signaling.
+## Dependencies
+- **baresip**: SIP stack.
+- **re**: Libre SIP library.
+- **lvgl**: Graphics library (v8.3+).
+- **sqlite3**: Database for persistence.
+- **ffmpeg**: (Optional) For video coding.
 
-### User Interface (LVGL 8.3)
-- **Applet Architecture**: Modular UI composed of isolated "Applets" managed by an `AppletManager`.
-- **Dialer Applet**: Keypad, recent call status, and easy account switching.
-- **Contacts Applet**: Add, edit, and delete contacts (stored in SQLite).
-- **Messages (Chat) Applet**: Full SIP MESSAGE support with conversation history.
-- **Call History**: Detailed log of Incoming, Outgoing, and Missed calls.
-- **Settings**: On-device configuration for SIP Accounts, Audio/Video settings, and Network params.
+## Project Structure
+The source code is organized in `src/`:
+- `src/main_fbdev.c`: Entry point and LVGL initialization.
+- `src/applets/`: Individual applet logic and UI.
+- `src/manager/`: Core managers (Baresip, Config, Database, etc.).
+- `src/ui/`: Shared UI helpers and components.
 
-### Architecture
-- **Baresip Manager**: A high-level C wrapper around `libre` and `libbaresip` that handles the event loop, thread safety, and state management.
-- **Database Manager**: SQLite3 backend for persistent storage of Contacts, History, and Messages.
-- **SDL2 Driver**: Robust display and input driver for development/desktop environments (800x600 resolution).
+## Building
 
-## Build Instructions
+1.  **Clone the repository**:
+    ```sh
+    git clone https://github.com/your-repo/baresip-lvgl.git
+    cd baresip-lvgl
+    ```
 
-### Prerequisites
-- **Libraries**: `SDL2`, `sqlite3`, `openssl`, `opus`, `ffmpeg` (optional for video).
-- **Tools**: `gcc`, `make`, `cmake`.
+2.  **Dependencies**:
+    Ensure you have `sdl2`, `openssl`, `zlib`, `sqlite3`, and `opus` development libraries installed (or in your cross-compilation environment).
 
-### Compiling
-0. Initialize submodules:
-   ```bash
-   git submodule update --init --recursive
-   ```
+3.  **Build**:
+    ```sh
+    make -j$(nproc)
+    ```
+    This produces the `build/baresip-lvgl` executable.
 
-1. Build the project:
-   ```bash
-   make
-   ```
-   *Note: First build compiles LVGL and Baresip dependencies and may take a minute.*
+## Configuration & Notes
 
-2. Run:
-   ```bash
-   ./build/baresip-lvgl
-   ```
+### Color Depth (Vital for SDL)
+If running with the SDL driver (e.g., on PC/QEMU), `LV_COLOR_DEPTH` **MUST** be set to `32` in `lv_conf.h`.
+- **Reason**: The SDL driver creates an ARGB8888 texture. Any other bit depth (16, 24) will cause buffer overflows (heap corruption) or severe visual color artifacts (pink/green tint).
+- **Video**: The `active_video` module in `baresip_manager.c` has been updated to support `ARGB8888` conversion.
 
-### Debugging
-The application outputs logs to `stdout`.
-- **Log Level**: Configurable in `Settings > App Settings` or via `config.json`.
-- **Visuals**: Ensure your SDL2 environment supports 32-bit color (`ARGB8888`) to match `LV_COLOR_DEPTH=32`.
+### Usage
+Run directly on the target:
+```sh
+./build/baresip-lvgl
+```
 
-## Configuration
-Application state is persisted in `~/.baresip/`:
-- `accounts`: SIP Account configurations.
-- `config`: Core baresip settings.
-- `settings.json`: App-specific settings (Log level, default account).
-- `baresip_lvgl.db`: SQLite database for user data.
+The application normally starts via init script `/etc/init.d/S99baresip-lvgl` on the embedded target.
 
-## Recent Updates
-- **Stability**: Fixed memory corruption issues in Baresip integration.
-- **Visuals**: Upgraded to 32-bit color depth and 800x600 SVGA resolution for crisp rendering without artifacts.
-- **Chat**: Newly integrated messaging applet with real-time updates.
-
-## License
-BSD-3-Clause (See LICENSE file).
