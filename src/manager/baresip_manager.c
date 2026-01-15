@@ -1551,12 +1551,20 @@ static void check_call_watchdog(void *arg) {
 
     bool found = false;
     struct le *le;
-    for (le = ((struct list *)uag_list())->head; le; le = le->next) {
-        struct ua *u = le->data;
-        struct call *c = ua_call(u);
-        if (c == g_call_state.current_call) {
-            found = true;
-            break;
+    // FIX: Iterate ALL calls for each UA, not just the primary 'ua_call()'.
+    // ua_call(u) only returns the focus call, causing secondary calls (e.g. incoming while active)
+    // to be treated as "vanished" by the watchdog.
+    struct le *le_ua;
+    for (le_ua = ((struct list *)uag_list())->head; le_ua && !found; le_ua = le_ua->next) {
+        struct ua *u = le_ua->data;
+        struct list *calls_list = ua_calls(u);
+        struct le *le_call;
+        for (le_call = list_head(calls_list); le_call; le_call = le_call->next) {
+             struct call *c = le_call->data;
+             if (c == g_call_state.current_call) {
+                 found = true;
+                 break;
+             }
         }
     }
 
@@ -1768,7 +1776,63 @@ int baresip_manager_reject_call(void *call_ptr) {
 
 int baresip_manager_hangup(void) {
   if (!g_call_state.current_call) return -1;
-  call_hangup(g_call_state.current_call, 0, NULL);
+
+  struct call *call = g_call_state.current_call;
+  log_info("BaresipManager", "Hangup: Hanging up call %p", call);
+  
+  // Use 486 Busy Here for explicit rejection
+  call_hangup(call, 486, "Busy Here"); 
+
+  // Check if there are other active calls to switch to
+  struct call *next_call = NULL;
+  int others = 0;
+
+  struct le *le;
+  for (le = ((struct list *)uag_list())->head; le; le = le->next) {
+       struct ua *u = le->data;
+       struct list *calls = ua_calls(u);
+       struct le *lec;
+       for (lec = calls->head; lec; lec = lec->next) {
+            struct call *c = lec->data;
+            // Ignore the call we just hung up (pointer match) and any terminated calls
+            if (c && c != call && call_state(c) != CALL_STATE_TERMINATED) {
+                 if (!next_call) next_call = c;
+                 others++;
+            }
+       }
+  }
+
+  if (others > 0 && next_call) {
+       log_info("BaresipManager", "Hangup: Switching to next active call %p (Total others: %d)", next_call, others);
+       g_call_state.current_call = next_call;
+       g_call_state.state = call_state(next_call);
+       
+       if (g_call_state.current_call) {
+             safe_strncpy(g_call_state.peer_uri, call_peeruri(g_call_state.current_call),
+                     sizeof(g_call_state.peer_uri));
+       }
+
+       // Notify listeners of the switch immediately to update UI
+       if (g_listener_mgr.count > 0) {
+            for(int i=0; i<g_listener_mgr.count; i++) {
+                if(g_listener_mgr.listeners[i])
+                    g_listener_mgr.listeners[i](g_call_state.state, g_call_state.peer_uri, (void *)g_call_state.current_call);
+            }
+       }
+  } else {
+       log_info("BaresipManager", "Hangup: No other calls, forcing IDLE");
+       g_call_state.state = CALL_STATE_IDLE; 
+       g_call_state.current_call = NULL;
+       
+       // Force notify IDLE to ensure UI closes
+       if (g_listener_mgr.count > 0) {
+            for(int i=0; i<g_listener_mgr.count; i++) {
+                if(g_listener_mgr.listeners[i])
+                    g_listener_mgr.listeners[i](CALL_STATE_IDLE, NULL, NULL);
+            }
+       }
+  }
+
   return 0;
 }
 

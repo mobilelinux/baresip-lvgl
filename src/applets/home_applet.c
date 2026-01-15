@@ -119,19 +119,39 @@ static void home_applet_update_notifications(home_data_t *data) {
   log_info("HomeApplet", "Update Notifications: State=%d Missed=%d Unread=%d", state, missed, unread);
   
   // 2. Update Home Notifications
+  // FIX: Scan ALL calls. Baresip Manager state only reflects the *current* focused call.
+  // We want to show "Incoming" if ANY call is incoming, and "In Call" if ANY is active.
+  call_info_t calls[8];
+  int count = baresip_manager_get_active_calls(calls, 8);
   
-  // Incoming Call
-  if (state == CALL_STATE_INCOMING) {
+  bool any_incoming = false;
+  bool any_active = false;
+  
+  for(int i=0; i<count; i++) {
+      if (calls[i].state == CALL_STATE_INCOMING) {
+          any_incoming = true;
+      }
+      else if (calls[i].state == CALL_STATE_ESTABLISHED || 
+               calls[i].state == CALL_STATE_OUTGOING ||
+               calls[i].state == CALL_STATE_RINGING ||
+               calls[i].state == CALL_STATE_EARLY) {
+          any_active = true;
+      }
+  }
+
+  // Incoming Call Notification
+  if (any_incoming) {
       lv_obj_clear_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
+      // Optional: Update text to show count if > 1? For now keep simple.
   } else {
       lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
   }
   
-  // Active Call (Outgoing, Connected, Ringing, Early)
-  if (state == CALL_STATE_ESTABLISHED || 
-      state == CALL_STATE_OUTGOING ||
-      state == CALL_STATE_RINGING ||
-      state == CALL_STATE_EARLY) {
+  // Active Call Notification
+  // Only show if NOT showing Incoming? Or show both? 
+  // User request: "when there is any incoming call, should show 'Incomings' notification"
+  // It implies priority. But we have space for both. Let's show both if applicable.
+  if (any_active) {
        lv_obj_clear_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
   } else {
        lv_obj_add_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
