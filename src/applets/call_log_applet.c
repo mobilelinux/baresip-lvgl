@@ -49,65 +49,14 @@ static void show_call_log_context_menu(const call_log_entry_t *entry,
 static bool g_filter_missed_only = false;
 static bool g_selection_mode = false;
 static bool g_selected_items[100]; // Matches MAX_HISTORY behavior
-static lv_obj_t *g_mode_btn = NULL; // Edit/Close button in header
-static lv_obj_t *g_log_trash_btn = NULL; // Floating Trash button
+static lv_obj_t *g_trash_fab = NULL; // Trash FAB
+static lv_obj_t *g_edit_btn = NULL; // Header Edit Btn
 static lv_obj_t *g_filter_btn_all = NULL;
 static lv_obj_t *g_filter_btn_missed = NULL;
 
 extern void history_delete_mask(const bool *selection, int count);
 
-// Helper to refresh the list content
-static void populate_log_list(void);
-
 // Picker Implementation
-// ...
-
-// --- Handlers ---
-
-static void on_edit_clicked(lv_event_t *e) {
-    (void)e;
-    g_selection_mode = !g_selection_mode;
-    if (!g_selection_mode) {
-         memset(g_selected_items, 0, sizeof(g_selected_items));
-    }
-    
-    // Update UI
-    if (g_mode_btn) {
-        lv_obj_t *lbl = lv_obj_get_child(g_mode_btn, 0); // Assuming label is 0th child
-        if (lbl) lv_label_set_text(lbl, g_selection_mode ? LV_SYMBOL_CLOSE : LV_SYMBOL_EDIT);
-    }
-    
-    if (g_log_trash_btn) {
-        // Always start with Trash HIDDEN in selection mode (count=0)
-        lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    populate_log_list();
-}
-
-static void on_trash_clicked(lv_event_t *e) {
-    (void)e;
-    int count = history_get_count();
-    if (count > 0) {
-        history_delete_mask(g_selected_items, count);
-        log_info("CallLogApplet", "Deleted selected items");
-    }
-    g_selection_mode = false;
-    memset(g_selected_items, 0, sizeof(g_selected_items));
-
-    // Reset Icon
-    if (g_mode_btn && lv_obj_get_child_cnt(g_mode_btn) > 0) {
-         lv_obj_t *lbl = lv_obj_get_child(g_mode_btn, 0);
-         lv_label_set_text(lbl, LV_SYMBOL_EDIT);
-    }
-    
-    if (g_log_trash_btn) {
-        lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    populate_log_list();
-}
-
 static void close_picker_modal(void) {
   if (g_account_picker_modal) {
     lv_obj_del(g_account_picker_modal);
@@ -115,7 +64,7 @@ static void close_picker_modal(void) {
   }
 }
 
-static void account_picker_cancel(lv_event_t *e) { close_picker_modal(); }
+static void account_picker_cancel(lv_event_t *e) { (void)e; close_picker_modal(); }
 
 static void account_picker_item_clicked(lv_event_t *e) {
   const char *aor = (const char *)lv_event_get_user_data(e);
@@ -214,18 +163,16 @@ static void close_context_menu(void) {
   }
 }
 
-static void context_menu_cancel(lv_event_t *e) { close_context_menu(); }
+static void context_menu_cancel(lv_event_t *e) { (void)e; close_context_menu(); }
 
 // Need reference to self for refresh
 extern applet_t call_log_applet;
-
-// --- Handlers (Defined above) ---
-
 
 // Helper to refresh the list content
 static void populate_log_list(void);
 
 static void context_menu_delete_log_refresh(lv_event_t *e) {
+  (void)e;
   if (g_context_menu_index >= 0) {
     history_remove(g_context_menu_index);
     close_context_menu();
@@ -236,9 +183,11 @@ static void context_menu_delete_log_refresh(lv_event_t *e) {
 }
 
 static void context_menu_add_contact(lv_event_t *e) {
+  (void)e;
   close_context_menu();
+  const char *number = g_context_menu_entry.number;
   // Open Contacts Applet in New Mode
-  contacts_applet_open_new(g_context_menu_entry.number);
+  contacts_applet_open_new(number);
   applet_manager_launch_applet(&contacts_applet);
 }
 
@@ -772,15 +721,39 @@ static void list_checkbox_cb(lv_event_t *e) {
         g_selected_items[index] = lv_obj_has_state(cb, LV_STATE_CHECKED);
         
         // Update Trash Visibility
-        if (g_log_trash_btn) {
-            bool any_selected = false;
-            for(int i=0; i<100; i++) {
-                if (g_selected_items[i]) { any_selected = true; break; }
-            }
-            if (any_selected) lv_obj_clear_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
-            else lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN);
+        int count = 0;
+        for(int i=0; i<100; i++) if(g_selected_items[i]) count++;
+        
+        if (g_trash_fab) {
+            if (count > 0) lv_obj_clear_flag(g_trash_fab, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(g_trash_fab, LV_OBJ_FLAG_HIDDEN);
         }
     }
+}
+
+static void log_item_toggle_select(lv_event_t *e) {
+    int index = (int)(intptr_t)lv_event_get_user_data(e);
+    if (index >= 0 && index < 100) {
+        g_selected_items[index] = !g_selected_items[index];
+        populate_log_list(); // Refresh
+    }
+}
+
+static void toggle_edit_mode_clicked(lv_event_t *e) {
+    (void)e;
+    g_selection_mode = !g_selection_mode;
+    if (g_selection_mode) {
+        memset(g_selected_items, 0, sizeof(g_selected_items));
+    }
+    populate_log_list();
+}
+
+static void delete_selected_logs_clicked(lv_event_t *e) {
+    (void)e;
+    // History delete mask
+    history_delete_mask(g_selected_items, 100);
+    g_selection_mode = false;
+    populate_log_list();
 }
 
 static void populate_log_list(void) {
@@ -808,7 +781,6 @@ static void populate_log_list(void) {
         lv_obj_set_size(hdr, LV_PCT(100), 30);
         lv_obj_set_style_bg_color(hdr, lv_palette_lighten(LV_PALETTE_GREY, 4), 0);
         lv_obj_set_style_border_width(hdr, 0, 0);
-        lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_left(hdr, 10, 0);
@@ -822,9 +794,9 @@ static void populate_log_list(void) {
     // 3. Render Item
     lv_obj_t *item = lv_obj_create(g_call_log_list);
     lv_obj_set_size(item, LV_PCT(100), 70);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(item, lv_color_white(), 0);
     lv_obj_set_style_border_width(item, 0, 0);
-    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_border_side(item, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(item, 1, 0);
     lv_obj_set_style_border_color(item, lv_palette_lighten(LV_PALETTE_GREY, 3), 0);
@@ -837,8 +809,13 @@ static void populate_log_list(void) {
     if (g_selection_mode) {
         lv_obj_t *cb = lv_checkbox_create(item);
         lv_checkbox_set_text(cb, "");
+        lv_obj_align(cb, LV_ALIGN_LEFT_MID, 0, 0);
         if (g_selected_items[i]) lv_obj_add_state(cb, LV_STATE_CHECKED);
         lv_obj_add_event_cb(cb, list_checkbox_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)i);
+        
+        // Allow row click to toggle
+        lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(item, log_item_toggle_select, LV_EVENT_CLICKED, (void*)(intptr_t)i);
     } else {
         lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
         call_log_entry_t *entry_copy = lv_mem_alloc(sizeof(call_log_entry_t));
@@ -846,6 +823,9 @@ static void populate_log_list(void) {
         lv_obj_add_event_cb(item, log_item_clicked, LV_EVENT_CLICKED, entry_copy);
         lv_obj_add_event_cb(item, log_long_press_handler, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
     }
+
+    // Adjust left padding for avatar if checkbox present
+    int x_offset = g_selection_mode ? 40 : 0;
 
     // Avatar
     // Reuse cleaning
@@ -860,6 +840,52 @@ static void populate_log_list(void) {
     } else {
         snprintf(number_disp, sizeof(number_disp), "%s", uri_clean);
     }
+    
+    lv_obj_t *av = lv_obj_create(item);
+    lv_obj_set_size(av, 40, 40);
+    lv_obj_set_style_radius(av, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(av, lv_palette_main(LV_PALETTE_BLUE_GREY), 0);
+    lv_obj_align(av, LV_ALIGN_LEFT_MID, x_offset, 0);
+    
+    lv_obj_t *lbl = lv_label_create(av);
+    lv_label_set_text(lbl, (strlen(number_disp)>0) ? number_disp : "?"); 
+    lv_obj_center(lbl);
+    // Let's use create_avatar but we need to modify it to accept parent?
+    // Existing create_avatar attaches to parent center. We want to align it manually?
+    // The previous code called create_avatar(item...).
+    // Let's just create it manually here to control alignment easily.
+    // Or wrapper.
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_center(lbl);
+
+    // ... Rest of item drawing ...
+    // Since I replaced the block ending at create_avatar, I must ensure I didn't break functionality.
+    // The original code: 
+    // create_avatar(item, number_disp, 40, 0);
+    //
+    // I need to replicate create_avatar OR modify create_avatar to support offset.
+    // create_avatar centers the label. It doesn't algin the avatar obj itself?
+    // Checking create_avatar implementation in original file (Line 460):
+    // lv_obj_create(parent) ...
+    // It doesn't set alignment on the avatar object itself relative to parent!
+    // So it flows in flex layout?
+    // Yes, `item` has `LV_FLEX_FLOW_ROW`.
+    // So just adding elements adds them to flow.
+    //
+    // So if I add checkbox first, then avatar, it flows correctly!
+    // I don't need manual `x_offset` and `lv_obj_align` if flex is used!
+    // Let's check `item` creation:
+    // lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+    //
+    // YES! Flex flow handles it. 
+    // If g_selection_mode, I added checkbox. It appears first.
+    // Then create_avatar(item...) adds avatar. It appears second.
+    // So NO manual offset needed!
+    //
+    // I should revert the manual offset logic and just rely on flex order.
+    //
+    // BUT, `create_avatar` was called at the end of the original snippet I replaced.
+    // So I should just call `create_avatar` normally.
     
     create_avatar(item, number_disp, 40, 0);
     
@@ -932,6 +958,8 @@ static void filter_missed_clicked(lv_event_t *e) {
     populate_log_list();
 }
 
+// Old mode_toggle_clicked removed
+
 static int call_log_init(applet_t *applet) {
   log_info("CallLogApplet", "Initializing");
   g_log_applet = applet;
@@ -944,39 +972,43 @@ static int call_log_init(applet_t *applet) {
 
   // 1. Header (Manual Layout for precise centering)
   // 1. Header
-  // 1. Header
   lv_obj_t *header = ui_create_title_bar(applet->screen, "Call Log", true, back_btn_clicked, NULL);
   
-  // Edit Button (Toggle)
-  g_mode_btn = ui_header_add_action_btn(header, LV_SYMBOL_EDIT, on_edit_clicked, NULL);
+  // Edit Button (Right)
+  // Edit Button (Right)
+  g_edit_btn = ui_header_add_action_btn(header, LV_SYMBOL_EDIT, toggle_edit_mode_clicked, NULL);
+
+  // 2. Filter Row (Below Header)
+  lv_obj_t *filter_row = lv_obj_create(applet->screen);
+  lv_obj_set_size(filter_row, LV_PCT(100), 50);
+  lv_obj_set_style_bg_opa(filter_row, 0, 0);
+  lv_obj_set_style_border_width(filter_row, 0, 0);
+  lv_obj_set_flex_flow(filter_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(filter_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_all(filter_row, 5, 0);
+  lv_obj_set_style_pad_gap(filter_row, 20, 0);
+
+  // Filter Buttons
+  g_filter_btn_all = lv_btn_create(filter_row);
+  lv_obj_set_size(g_filter_btn_all, 80, 36);
+  lv_obj_set_style_bg_color(g_filter_btn_all, lv_palette_main(LV_PALETTE_BLUE), 0); 
+  lv_obj_t *lbl_all = lv_label_create(g_filter_btn_all);
+  lv_label_set_text(lbl_all, "All");
+  lv_obj_center(lbl_all); // Center text
+  lv_obj_add_event_cb(g_filter_btn_all, filter_all_clicked, LV_EVENT_CLICKED, NULL);
+
+  g_filter_btn_missed = lv_btn_create(filter_row);
+  lv_obj_set_size(g_filter_btn_missed, 80, 36);
+  lv_obj_set_style_bg_color(g_filter_btn_missed, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_t *lbl_missed = lv_label_create(g_filter_btn_missed);
+  lv_label_set_text(lbl_missed, "Missed");
+  lv_obj_center(lbl_missed); // Center text
+  lv_obj_add_event_cb(g_filter_btn_missed, filter_missed_clicked, LV_EVENT_CLICKED, NULL);
 
   // 3. List
   g_call_log_list = lv_obj_create(applet->screen);
   lv_obj_set_width(g_call_log_list, LV_PCT(100)); // Full width
   lv_obj_set_flex_grow(g_call_log_list, 1); 
-  lv_obj_set_flex_flow(g_call_log_list, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_all(g_call_log_list, 0, 0);
-  lv_obj_set_style_border_width(g_call_log_list, 0, 0);
-
-  // Floating Trash Button (Created AFTER list for Z-Index)
-  g_log_trash_btn = lv_btn_create(applet->screen);
-  lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_FLOATING);
-  lv_obj_set_size(g_log_trash_btn, 60, 60);
-  lv_obj_align(g_log_trash_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
-  lv_obj_set_style_radius(g_log_trash_btn, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(g_log_trash_btn, lv_palette_main(LV_PALETTE_RED), 0);
-  lv_obj_set_style_shadow_width(g_log_trash_btn, 10, 0);
-  lv_obj_add_flag(g_log_trash_btn, LV_OBJ_FLAG_HIDDEN); // Hidden by default
-  
-  lv_obj_t *trash_icon = lv_label_create(g_log_trash_btn);
-  lv_label_set_text(trash_icon, LV_SYMBOL_TRASH);
-  lv_obj_set_style_text_font(trash_icon, &lv_font_montserrat_24, 0);
-  lv_obj_center(trash_icon);
-  
-  lv_obj_add_event_cb(g_log_trash_btn, on_trash_clicked, LV_EVENT_CLICKED, NULL);
-
-  // Initial Population
-  populate_log_list();
   
   // Match Padding with Header (approx)
   lv_obj_set_style_pad_left(g_call_log_list, 15, 0);
@@ -991,12 +1023,28 @@ static int call_log_init(applet_t *applet) {
 
   populate_log_list();
 
+  // Trash FAB (Bottom Center) - Hidden by default
+  g_trash_fab = lv_btn_create(applet->screen);
+  lv_obj_add_flag(g_trash_fab, LV_OBJ_FLAG_FLOATING);
+  lv_obj_set_size(g_trash_fab, 56, 56);
+  lv_obj_align(g_trash_fab, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_set_style_radius(g_trash_fab, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(g_trash_fab, lv_palette_main(LV_PALETTE_RED), 0);
+  lv_obj_add_flag(g_trash_fab, LV_OBJ_FLAG_HIDDEN);
+  
+  lv_obj_t *t_icon = lv_label_create(g_trash_fab);
+  lv_label_set_text(t_icon, LV_SYMBOL_TRASH);
+  lv_obj_center(t_icon);
+  lv_obj_add_event_cb(g_trash_fab, delete_selected_logs_clicked, LV_EVENT_CLICKED, NULL);
+
   return 0;
 }
 
 static void call_log_start(applet_t *applet) {
   (void)applet;
   log_info("CallLogApplet", "Started");
+  populate_log_list();
+  db_mark_missed_calls_read();
 }
 
 static void call_log_pause(applet_t *applet) {
@@ -1007,6 +1055,8 @@ static void call_log_pause(applet_t *applet) {
 static void call_log_resume(applet_t *applet) {
   (void)applet;
   log_debug("CallLogApplet", "Resumed");
+  populate_log_list();
+  db_mark_missed_calls_read();
 
   // Refresh list to show new entries
   populate_log_list();

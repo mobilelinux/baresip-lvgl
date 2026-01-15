@@ -1,0 +1,21 @@
+config BR2_PACKAGE_BARESIP_LVGL
+	bool "baresip-lvgl"
+	select BR2_PACKAGE_OPENSSL
+	select BR2_PACKAGE_ZLIB
+	select BR2_PACKAGE_OPUS
+	select BR2_PACKAGE_SQLITE
+	select BR2_PACKAGE_FFMPEG
+	select BR2_PACKAGE_FFMPEG_SWSCALE
+	select BR2_PACKAGE_SDL2
+	select BR2_PACKAGE_SDL2_IMAGE
+	select BR2_PACKAGE_SDL2_TTF
+	# ALSA support
+	select BR2_PACKAGE_ALSA_LIB
+	select BR2_PACKAGE_ALSA_UTILS
+	# V4L2 support
+	select BR2_PACKAGE_LIBV4L
+	select BR2_PACKAGE_V4L_UTILS
+	help
+	  Baresip SIP User Agent with LVGL GUI
+
+	  https://github.com/mobilelinux/baresip-lvgl

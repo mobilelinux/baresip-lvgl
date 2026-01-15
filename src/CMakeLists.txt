@@ -5,9 +5,6 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -D_THREAD_SAFE -DHAVE_INET6")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rdynamic")
 
-add_definitions(-DUSE_FBDEV)
-add_definitions(-DUSE_EVDEV)
-
 # Force static build for baresip and modules
 set(STATIC OFF CACHE BOOL "Build static" FORCE)
 
@@ -36,7 +33,7 @@ set(BARESIP_UNIT_TESTS OFF CACHE BOOL "Disable tests" FORCE)
 
 # Build dependencies
 add_subdirectory(deps/re)
-# add_subdirectory(deps/rem)
+add_subdirectory(deps/rem)
 add_subdirectory(deps/baresip)
 
 # Find SDL2 (Optional/Unused for FBDEV but kept for reference or dependencies)
@@ -58,7 +55,7 @@ include_directories(
     deps/baresip/include
     deps/re/include
     src/manager
-    # deps/rem/include (Merged into re)
+    deps/rem/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
 )
@@ -94,7 +91,7 @@ set_target_properties(baresip-lvgl PROPERTIES ENABLE_EXPORTS TRUE)
 
 # Link Libraries
 target_link_libraries(baresip-lvgl
-    -Wl,--whole-archive baresip re -Wl,--no-whole-archive
+    -Wl,--whole-archive baresip re rem -Wl,--no-whole-archive
     ssl crypto pthread z resolv sqlite3
     # avcodec avformat avutil swscale avdevice swresample
 )

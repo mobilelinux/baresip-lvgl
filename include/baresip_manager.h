@@ -23,7 +23,10 @@ typedef void (*reg_event_cb)(const char *aor, reg_status_t status);
 typedef void (*message_event_cb)(const char *peer_uri, const char *text);
 
 int baresip_manager_init(void);
-void baresip_manager_set_callback(call_event_cb cb);
+// Replaces set_callback
+void baresip_manager_add_listener(call_event_cb cb);
+void baresip_manager_set_callback(call_event_cb cb); // Deprecated but kept for compat
+
 void baresip_manager_set_reg_callback(reg_event_cb cb);
 void baresip_manager_set_message_callback(message_event_cb cb);
 reg_status_t baresip_manager_get_account_status(const char *aor);

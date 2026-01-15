@@ -19,7 +19,7 @@ UNAME_S := $(shell uname -s)
 
 # Common CFLAGS
 COMMON_CFLAGS = -Wall -Wextra -O2 -I$(INC_DIR) -I$(LVGL_DIR) -I$(LV_DRIVERS_DIR) -I. \
-                 -I deps/baresip/include -I deps/re/include \
+                 -I deps/baresip/include -I deps/re/include -I deps/rem/include \
                  $(shell sdl2-config --cflags) \
                  $(shell pkg-config --cflags libavcodec libavutil libavformat libswscale libswresample opus) \
                  -DSTATIC

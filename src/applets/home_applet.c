@@ -46,6 +46,10 @@ typedef struct {
 
 
 
+// View Mode Externs
+extern void call_applet_request_incoming_view(void);
+extern void call_applet_request_active_view(void);
+
 extern void settings_applet_open_accounts(void);
 
 static void update_account_display(home_data_t *data) {
@@ -100,6 +104,116 @@ static void update_account_display(home_data_t *data) {
     }
 }
 
+// FORWARD DECLARATION
+static void update_account_display(home_data_t *data);
+
+static void home_applet_update_notifications(home_data_t *data) {
+  if (!data) return;
+  
+  // 1. Get States
+  int missed = 0;
+  int unread = 0;
+  db_get_unread_comp_count(&missed, &unread);
+  
+  enum call_state state = baresip_manager_get_state();
+  log_info("HomeApplet", "Update Notifications: State=%d Missed=%d Unread=%d", state, missed, unread);
+  
+  // 2. Update Home Notifications
+  
+  // Incoming Call
+  if (state == CALL_STATE_INCOMING) {
+      lv_obj_clear_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
+  } else {
+      lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
+  }
+  
+  // Active Call (Outgoing, Connected, Ringing, Early)
+  if (state == CALL_STATE_ESTABLISHED || 
+      state == CALL_STATE_OUTGOING ||
+      state == CALL_STATE_RINGING ||
+      state == CALL_STATE_EARLY) {
+       lv_obj_clear_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
+  } else {
+       lv_obj_add_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
+  }
+  
+  // Missed & Messages logic remains same...
+  if (missed > 0) {
+      lv_obj_clear_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%d Missed Call%s", missed, missed > 1 ? "s" : "");
+      lv_label_set_text(data->missed_call_label, buf);
+  } else {
+      lv_obj_add_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
+  }
+  
+  if (unread > 0) {
+      lv_obj_clear_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%d New Message%s", unread, unread > 1 ? "s" : "");
+      lv_label_set_text(data->unread_msg_label, buf);
+  } else {
+      lv_obj_add_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
+  }
+  
+  // Badge updates...
+  if (data->apps_grid) {
+      uint32_t cnt = lv_obj_get_child_cnt(data->apps_grid);
+      for(uint32_t i=0; i<cnt; i++) {
+          lv_obj_t *tile = lv_obj_get_child(data->apps_grid, i);
+          if (lv_obj_get_child_cnt(tile) < 3) continue;
+          lv_obj_t *lbl = lv_obj_get_child(tile, 1);
+          lv_obj_t *badge = lv_obj_get_child(tile, 2);
+          const char *txt = lv_label_get_text(lbl);
+          if (strcmp(txt, "Call Log") == 0) {
+               if (missed > 0) {
+                   lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
+                   lv_label_set_text_fmt(badge, "%d", missed);
+               } else {
+                   lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+               }
+          } else if (strcmp(txt, "Messages") == 0) {
+               if (unread > 0) {
+                   lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
+                   lv_label_set_text_fmt(badge, "%d", unread);
+               } else {
+                   lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+               }
+          }
+      }
+  }
+}
+
+// Callback for instant updates
+static void home_on_call_state(enum call_state state, const char *peer, void *call) {
+    (void)state; (void)peer; (void)call;
+    // We need 'data' pointer. Where to store it?
+    // We can iterate applets to find Home, or store a static pointer since Home is singleton-ish.
+    // For now, let's look up Home applet instance.
+    int count;
+    applet_t **applets = applet_manager_get_all(&count);
+    for(int i=0; i<count; i++) {
+       if (applets[i] && strcmp(applets[i]->name, "Home") == 0) {
+           home_data_t *d = (home_data_t*)applets[i]->user_data;
+           if (d) {
+               // Must run on UI thread? LBGL is not thread safe?
+               // Assuming callback is from main thread (baresip_manager_loop runs in main).
+               home_applet_update_notifications(d);
+               
+               // FIX: Auto-navigate to Call Applet on Incoming Call
+                if (applets[i]->state == APPLET_STATE_RUNNING) {
+                    if (state == CALL_STATE_INCOMING) {
+                         log_info("HomeApplet", "Auto-launching Call Applet for Incoming Call");
+                         call_applet_request_incoming_view();
+                         applet_manager_launch("Call"); 
+                    }
+                }
+           }
+           break;
+       }
+    }
+}
+
 static void update_clock(lv_timer_t *timer) {
   home_data_t *data = (home_data_t *)timer->user_data;
   if (!data || !data->clock_label)
@@ -125,85 +239,8 @@ static void update_clock(lv_timer_t *timer) {
   // Update Account Status (every time or less freq? Every sec is fine for status icon)
   update_account_display(data);
   
-  // Update Notifications
-  // 1. Get States
-  int missed = 0;
-  int unread = 0;
-  db_get_unread_comp_count(&missed, &unread);
-  
-  enum call_state state = baresip_manager_get_state();
-  
-  // 2. Update Home Notifications (Priority Order in Flex Column)
-  
-  // Incoming Call
-  if (state == CALL_STATE_INCOMING) {
-      lv_obj_clear_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
-  } else {
-      lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
-  }
-  
-  // Active Call (Connected/Ringing/Dialing/Established)
-  // We hide InCall btn if Incoming is active? Or show both?
-  // Flex column handles stacking.
-  // Generally if Incoming, we don't show "In Call" unless it's a second call.
-  // But baresip-lvgl handles 1 active call mainly.
-  if (state != CALL_STATE_IDLE && state != CALL_STATE_INCOMING) {
-       lv_obj_clear_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
-       // Update text? e.g. "00:05" duration? 
-       // For now just "In Call" is static.
-  } else {
-       lv_obj_add_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
-  }
-  
-  // Missed Call
-  if (missed > 0) {
-      lv_obj_clear_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%d Missed Call%s", missed, missed > 1 ? "s" : "");
-      lv_label_set_text(data->missed_call_label, buf);
-  } else {
-      lv_obj_add_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
-  }
-  
-  // Unread Messages
-  if (unread > 0) {
-      lv_obj_clear_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%d New Message%s", unread, unread > 1 ? "s" : "");
-      lv_label_set_text(data->unread_msg_label, buf);
-  } else {
-      lv_obj_add_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
-  }
-
-  // 3. Update App Grid Badges
-  if (data->apps_grid) {
-      uint32_t cnt = lv_obj_get_child_cnt(data->apps_grid);
-      for(uint32_t i=0; i<cnt; i++) {
-          lv_obj_t *tile = lv_obj_get_child(data->apps_grid, i);
-          // Children: 0=Icon, 1=Label, 2=Badge
-          if (lv_obj_get_child_cnt(tile) < 3) continue;
-          
-          lv_obj_t *lbl = lv_obj_get_child(tile, 1);
-          lv_obj_t *badge = lv_obj_get_child(tile, 2);
-          const char *txt = lv_label_get_text(lbl);
-          
-          if (strcmp(txt, "Call Log") == 0) {
-               if (missed > 0) {
-                   lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
-                   lv_label_set_text_fmt(badge, "%d", missed);
-               } else {
-                   lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
-               }
-          } else if (strcmp(txt, "Messages") == 0) {
-               if (unread > 0) {
-                   lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
-                   lv_label_set_text_fmt(badge, "%d", unread);
-               } else {
-                   lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
-               }
-          }
-      }
-  }
+  // Periodic Update Notifications (Backup)
+  home_applet_update_notifications(data);
 }
 
 static void applet_tile_clicked(lv_event_t *e) {
@@ -219,17 +256,21 @@ static void account_info_clicked(lv_event_t *e) {
     applet_manager_launch("Settings");
 }
 
-/* Unused function removed */
-/* Unused function removed */
+// Externs for View Modes (Moved to top)
+// extern void call_applet_request_incoming_view(void);
+// extern void call_applet_request_active_view(void);
 
 static void incoming_call_clicked(lv_event_t *e) {
   (void)e;
-  // Launch Call Applet to handle incoming
+  // Explicitly request Incoming View
+  call_applet_request_incoming_view();
   applet_manager_launch("Call");
 }
 
 static void in_call_clicked(lv_event_t *e) {
   (void)e;
+  // Explicitly request Active View
+  call_applet_request_active_view();
   applet_manager_launch("Call");
 }
 
@@ -394,9 +435,15 @@ static int home_init(applet_t *applet) {
   memset(data, 0, sizeof(home_data_t));
   applet->user_data = data;
 
+  // Ensure screen has no padding/border (fixes startup offset)
+  lv_obj_set_style_pad_all(applet->screen, 0, 0);
+  lv_obj_set_style_border_width(applet->screen, 0, 0);
+
   // Root Tileview
   data->tileview = lv_tileview_create(applet->screen);
   lv_obj_set_size(data->tileview, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_pad_all(data->tileview, 0, 0); // Remove padding
+  lv_obj_set_style_border_width(data->tileview, 0, 0); // Remove border
   // Remove scrollbars
   lv_obj_set_scrollbar_mode(data->tileview, LV_SCROLLBAR_MODE_OFF);
   
@@ -625,6 +672,11 @@ static int home_init(applet_t *applet) {
 
   // Populate Favorites
   populate_favorites(data);
+  
+  // Register Call Listener for Instant Updates
+  baresip_manager_add_listener(home_on_call_state);
+
+  return 0;
 
   return 0;
 }

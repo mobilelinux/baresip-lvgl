@@ -10,6 +10,11 @@
 #include <string.h> // Added for memset
 #include <sys/time.h>
 #include <unistd.h>
+#ifdef USE_FBDEV
+#include "lv_drivers/display/fbdev.h"
+#include "lv_drivers/indev/evdev.h"
+#endif
+#include <stdlib.h>
 
 // Forward declarations for applet registration functions
 extern void home_applet_register(void);
@@ -30,13 +35,17 @@ static uint32_t get_tick_ms(void) {
 
 // Global for loop callback
 static uint32_t last_tick = 0;
+#ifndef USE_FBDEV
 extern volatile bool sdl_quit_qry;
+#endif
 
 static void ui_loop_cb(void) {
+#ifndef USE_FBDEV
   if (sdl_quit_qry) {
     re_cancel();
     return;
   }
+#endif
 
   // Update LVGL tick
   uint32_t current_tick = get_tick_ms();
@@ -53,11 +62,63 @@ static void ui_loop_cb(void) {
   lv_timer_handler();
 }
 
-// Initialize LVGL display with SDL2
+// Initialize LVGL display
 static int init_display(void) {
   lv_init();
 
-  // Initialize SDL
+#ifdef USE_FBDEV
+  // FBDEV Initialization
+  fbdev_init();
+
+  // Create display buffer (Double buffering or partial)
+  static lv_disp_draw_buf_t disp_buf;
+  // Use small buffer for FBDEV relative to resolution? Or full? 
+  // Existing code used 100 lines for SDL. Let's stick to it.
+  const size_t buf_size = 800 * 480 * sizeof(lv_color_t) / 10; // Approx 1/10th screen?
+  // Hardcoded for now or use macro if available. SDL_HOR_RES might be SDL specific.
+  // Re-use SDL_HOR_RES if defined, or define defaults.
+  #ifndef SDL_HOR_RES
+  #define SDL_HOR_RES 800
+  #endif
+  #ifndef SDL_VER_RES
+  #define SDL_VER_RES 480
+  #endif
+
+  lv_color_t *buf1 = malloc(SDL_HOR_RES * 100 * sizeof(lv_color_t));
+  lv_color_t *buf2 = NULL; // Single buffer for FBDEV usually enough unless double buffered
+  
+  if (!buf1) {
+      log_error("Main", "Failed to allocate display buffer");
+      return -1;
+  }
+  
+  lv_disp_draw_buf_init(&disp_buf, buf1, buf2, SDL_HOR_RES * 100);
+
+  // Initialize and register display driver
+  static lv_disp_drv_t disp_drv;
+  lv_disp_drv_init(&disp_drv);
+  disp_drv.draw_buf = &disp_buf;
+  disp_drv.flush_cb = fbdev_flush;
+  disp_drv.hor_res = SDL_HOR_RES;
+  disp_drv.ver_res = SDL_VER_RES;
+  // disp_drv.screen_transp = 1; // Not supported on standard FBDEV usually
+
+  lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
+  if (!disp) {
+    log_error("Main", "Failed to register display driver");
+    return -1;
+  }
+
+  // Initialize EVDEV input
+  evdev_init();
+  static lv_indev_drv_t indev_drv;
+  lv_indev_drv_init(&indev_drv);
+  indev_drv.type = LV_INDEV_TYPE_POINTER;
+  indev_drv.read_cb = evdev_read;
+  lv_indev_drv_register(&indev_drv);
+
+#else
+  // SDL Initialization
   sdl_init();
 
   // Create display buffer
@@ -95,7 +156,9 @@ static int init_display(void) {
   indev_drv_mouse.type = LV_INDEV_TYPE_POINTER;
   indev_drv_mouse.read_cb = sdl_mouse_read;
   lv_indev_drv_register(&indev_drv_mouse);
+#endif
 
+#ifndef USE_FBDEV
   // Initialize keyboard input device
   static lv_indev_drv_t indev_drv_kb;
   lv_indev_drv_init(&indev_drv_kb);
@@ -114,6 +177,7 @@ static int init_display(void) {
   indev_drv_wheel.type = LV_INDEV_TYPE_ENCODER;
   indev_drv_wheel.read_cb = sdl_mousewheel_read;
   lv_indev_drv_register(&indev_drv_wheel);
+#endif
 
   log_info("Main", "LVGL display initialized with SDL2 (%dx%d)", SDL_HOR_RES,
            SDL_VER_RES);

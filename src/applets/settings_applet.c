@@ -35,6 +35,7 @@ typedef struct {
 
   // Call Settings Widgets
   lv_obj_t *call_start_auto_sw;
+  lv_obj_t *call_show_fav_sw; // [NEW]
   lv_obj_t *call_log_level_dd;
   lv_obj_t *call_listen_addr_ta;
   lv_obj_t *call_addr_fam_dd;
@@ -115,6 +116,11 @@ static enum {
   NAV_SOURCE_MAIN,
   NAV_SOURCE_DEEP_LINK
 } nav_source = NAV_SOURCE_MAIN;
+
+void settings_applet_open_accounts(void) {
+    target_screen = SETTINGS_SCREEN_ACCOUNTS;
+    nav_source = NAV_SOURCE_DEEP_LINK;
+}
 
 // Helper to sanitize input (replace | with _)
 static void sanitize_input(char *str) {
@@ -779,6 +785,9 @@ static void show_call_settings(settings_data_t *data) {
   data->call_start_auto_sw = create_switch_row(
       content, "Start Automatically", data->config.start_automatically);
 
+  data->call_show_fav_sw = create_switch_row(
+      content, "Favorite Contact Show", data->config.show_favorites);
+
   lv_obj_t *listen_ta = lv_textarea_create(content);
   lv_obj_set_width(listen_ta, LV_PCT(100));
   lv_textarea_set_one_line(listen_ta, true);
@@ -817,6 +826,9 @@ static void save_call_settings(settings_data_t *data) {
 
   data->config.start_automatically =
       lv_obj_has_state(data->call_start_auto_sw, LV_STATE_CHECKED);
+
+  data->config.show_favorites =
+      lv_obj_has_state(data->call_show_fav_sw, LV_STATE_CHECKED);
 
   data->config.log_level = lv_dropdown_get_selected(data->call_log_level_dd);
   logger_set_level((log_level_t)data->config.log_level);

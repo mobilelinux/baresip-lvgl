@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Start baresip-lvgl
+#
+
+case "$1" in
+  start)
+	echo "Starting baresip-lvgl..."
+	
+	# Wait for network (eth0) to be ready to avoid binding to loopback/invalid contact
+	count=0
+	echo "Waiting for eth0 IP..."
+	while ! ip addr show eth0 | grep -q "inet" ; do
+	  sleep 1
+	  count=$((count+1))
+	  if [ $count -ge 30 ]; then
+	     echo "Network timeout (eth0), starting anyway..."
+	     break
+	  fi
+	done
+	echo "Network ready or timeout reached."
+
+	# Ensure audio/video devices are ready
+	/usr/bin/baresip-lvgl &
+	;;
+  stop)
+	echo "Stopping baresip-lvgl..."
+	killall baresip-lvgl
+	;;
+  restart|reload)
+	"$0" stop
+	"$0" start
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?
