@@ -10,7 +10,7 @@
 #include <string.h> // Added for memset
 #include <sys/time.h>
 #include <unistd.h>
-#ifdef USE_FBDEV
+#if USE_FBDEV
 #include "lv_drivers/display/fbdev.h"
 #include "lv_drivers/indev/evdev.h"
 #endif
@@ -66,7 +66,7 @@ static void ui_loop_cb(void) {
 static int init_display(void) {
   lv_init();
 
-#ifdef USE_FBDEV
+#if USE_FBDEV
   // FBDEV Initialization
   fbdev_init();
 
