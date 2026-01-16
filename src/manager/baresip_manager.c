@@ -58,7 +58,8 @@ typedef struct {
   reg_status_t status;
 } account_status_t;
 
-#define MAX_CALLS 4
+// MAX_CALLS defined in header
+
 
 typedef struct {
   struct call *call;
@@ -191,24 +192,54 @@ static void add_or_update_call(struct call *call, enum call_state state, const c
     }
     
     // Add new
+    int free_slot = -1;
+    
+    // 1. Try to find a truly empty slot
     for (int i=0; i<MAX_CALLS; i++) {
         if (g_call_state.active_calls[i].call == NULL) {
-            g_call_state.active_calls[i].call = call;
-            g_call_state.active_calls[i].state = state;
-            if (peer) {
-                safe_strncpy(g_call_state.active_calls[i].peer_uri, peer, 256);
-            } else {
-                 g_call_state.active_calls[i].peer_uri[0] = '\0';
-            }
-            log_info("BaresipManager", "Added call %p to slot %d", call, i);
-            return;
+            free_slot = i;
+            break;
         }
     }
-    log_warn("BaresipManager", "Max calls reached, could not track call %p", call);
+    
+    // 2. If no empty slot, find a "dead" slot (IDLE/TERMINATED) to recycle
+    if (free_slot == -1) {
+        for (int i=0; i<MAX_CALLS; i++) {
+             enum call_state s = g_call_state.active_calls[i].state;
+             if (s == CALL_STATE_IDLE || s == CALL_STATE_TERMINATED || s == CALL_STATE_UNKNOWN) {
+                 log_warn("BaresipManager", "Recycling dead slot %d (State=%d, Call=%p)", i, s, g_call_state.active_calls[i].call);
+                 free_slot = i;
+                 break;
+             }
+        }
+    }
+
+    if (free_slot == -1) {
+        log_warn("BaresipManager", "CRITICAL: Max calls reached! Dumping slots:");
+        for (int i=0; i<MAX_CALLS; i++) {
+             log_warn("BaresipManager", "  Slot %d: State=%d | Call=%p | Peer='%s'", 
+                      i, g_call_state.active_calls[i].state, 
+                      g_call_state.active_calls[i].call,
+                      g_call_state.active_calls[i].peer_uri);
+        }
+    }
+
+    if (free_slot != -1) {
+        g_call_state.active_calls[free_slot].call = call;
+        g_call_state.active_calls[free_slot].state = state;
+        if (peer) {
+            safe_strncpy(g_call_state.active_calls[free_slot].peer_uri, peer, 256);
+        } else {
+            g_call_state.active_calls[free_slot].peer_uri[0] = '\0';
+        }
+        log_info("BaresipManager", "Added call %p to slot %d (State=%d)", call, free_slot, state);
+    } else {
+        log_warn("BaresipManager", "Max calls reached, could not track call %p", call);
+    }
 }
 
 static void remove_call(struct call *call) {
-  // if (!g_call_state.current_call) return; // REMOVED: Must remove call even if not current
+  bool found_in_list = false;
 
   for (int i = 0; i < MAX_CALLS; i++) {
     if (g_call_state.active_calls[i].call == call) {
@@ -216,42 +247,34 @@ static void remove_call(struct call *call) {
       g_call_state.active_calls[i].call = NULL;
       g_call_state.active_calls[i].state = CALL_STATE_IDLE;
       g_call_state.active_calls[i].peer_uri[0] = '\0';
+      found_in_list = true;
+      break; 
+    }
+  }
 
-      // If this was the current call, clear it and try to switch to another
-      // Check if any active calls remain
-      bool any_remain = false;
-      for (int k = 0; k < MAX_CALLS; k++) {
-          if (g_call_state.active_calls[k].call) {
-              any_remain = true;
-              break;
-          }
-      }
+  // Handle Current Call removal (Even if not in list due to overflow!)
+  if (g_call_state.current_call == call) {
+      log_info("BaresipManager", "Removing current_call %p (Found in list: %d)", call, found_in_list);
+      g_call_state.current_call = NULL;
+      g_call_state.state = CALL_STATE_IDLE; // Temporary
 
-      // If no calls remain, force IDLE state (Safety Net)
-      if (!any_remain) {
-          g_call_state.current_call = NULL;
-          g_call_state.state = CALL_STATE_IDLE;
-          log_info("BaresipManager", "No active calls remaining. State forced to IDLE.");
-      }
-      // Else if we removed the current call, switch to another
-      else if (g_call_state.current_call == call) {
-        g_call_state.current_call = NULL;
-        g_call_state.state = CALL_STATE_IDLE; // Temporary, will be overwritten if found
-
-        // Auto-switch to first available active call
-        for (int j = 0; j < MAX_CALLS; j++) {
-          if (g_call_state.active_calls[j].call) {
-            g_call_state.current_call = g_call_state.active_calls[j].call;
-            g_call_state.state = g_call_state.active_calls[j].state;
-            log_info("BaresipManager", "Auto-switched to call %p",
-                     g_call_state.current_call);
-            break;
-          }
+      // Auto-switch to first available active call
+      bool switched = false;
+      for (int j = 0; j < MAX_CALLS; j++) {
+        if (g_call_state.active_calls[j].call) {
+          g_call_state.current_call = g_call_state.active_calls[j].call;
+          g_call_state.state = g_call_state.active_calls[j].state;
+          log_info("BaresipManager", "Auto-switched to call %p",
+                    g_call_state.current_call);
+          switched = true;
+          break;
         }
       }
-
-      return;
-    }
+      
+      if (!switched) {
+           log_info("BaresipManager", "No active calls remaining. State forced to IDLE.");
+           g_call_state.state = CALL_STATE_IDLE;
+      }
   }
 }
 
@@ -1344,6 +1367,11 @@ int baresip_manager_init(void) {
   // FIX: Enable auto-accept (allocation) of incoming calls
   // Without this, SIPSESS_CONN fires but the call object is never created!
   cfg->call.accept = true;
+  
+  // FIX: Allow significantly more calls in Core than in UI to handle "zombie" 
+  // calls that are resolving (BYE/200 OK) in the background.
+  // UI Limit: 8 (MAX_CALLS), Core Limit: 32
+  cfg->call.max_calls = 32;  
 
   // Enable SIP Trace
   // cfg->sip.trace = true; // Error: No such member
@@ -1547,13 +1575,41 @@ static void check_call_watchdog(void *arg) {
     (void)arg;
     tmr_start(&watchdog_tmr, 1000, check_call_watchdog, NULL); // Reschedule
 
+    // START GARBAGE COLLECTOR
+    // Iterate active_calls and ensure they still exist in Core
+    for (int i = 0; i < MAX_CALLS; i++) {
+        if (g_call_state.active_calls[i].call) {
+             struct call *c = g_call_state.active_calls[i].call;
+             bool core_found = false;
+             
+             // Scan all UAs
+             struct le *le_ua;
+             for (le_ua = ((struct list *)uag_list())->head; le_ua && !core_found; le_ua = le_ua->next) {
+                 struct ua *u = le_ua->data;
+                 struct list *calls_list = ua_calls(u);
+                 struct le *le_call;
+                 for (le_call = list_head(calls_list); le_call; le_call = le_call->next) {
+                      if (le_call->data == c) {
+                          core_found = true;
+                          break;
+                      }
+                 }
+             }
+
+             if (!core_found) {
+                  log_warn("BaresipManager", "GC: Removing Zombie Call %p from slot %d", c, i);
+                  remove_call(c);
+                  // Check if this was current call? remove_call handles it.
+             }
+        }
+    }
+    // END GARBAGE COLLECTOR
+
     if (!g_call_state.current_call) return;
 
     bool found = false;
     struct le *le;
     // FIX: Iterate ALL calls for each UA, not just the primary 'ua_call()'.
-    // ua_call(u) only returns the focus call, causing secondary calls (e.g. incoming while active)
-    // to be treated as "vanished" by the watchdog.
     struct le *le_ua;
     for (le_ua = ((struct list *)uag_list())->head; le_ua && !found; le_ua = le_ua->next) {
         struct ua *u = le_ua->data;
@@ -1576,22 +1632,21 @@ static void check_call_watchdog(void *arg) {
         const char *peer = g_call_state.peer_uri;
         if (!peer || strlen(peer)==0) peer = "unknown";
         
-        // Infer type/account? Hard to know exactly without call obj, but we know it WAS active.
-        // Assume Outgoing if we initiated, but state might be INCOMING.
         call_type_t type = CALL_TYPE_OUTGOING;
         if (g_call_state.state == CALL_STATE_INCOMING) {
-             type = CALL_TYPE_INCOMING; // Or Missed?
-             // If never established...
+             type = CALL_TYPE_INCOMING; 
              if (g_call_state.state != CALL_STATE_ESTABLISHED) type = CALL_TYPE_MISSED;
         }
 
         log_warn("BaresipManager", "WATCHDOG: Adding History: %s (Type=%d)", peer, type);
         fflush(stdout);
-        history_add(peer, peer, type, ""); // Account unknown (empty)
+        history_add(peer, peer, type, ""); 
         
         // Update State
-        g_call_state.current_call = NULL;
-        g_call_state.state = CALL_STATE_TERMINATED;
+        struct call *dead_call = g_call_state.current_call;
+        
+        // Use remove_call to properly clean up and switch
+        remove_call(dead_call);
         
         if (g_call_state.callback) {
              g_call_state.callback(CALL_STATE_TERMINATED, peer, NULL);
@@ -1601,11 +1656,10 @@ static void check_call_watchdog(void *arg) {
          applet_t *current = applet_manager_get_current();
         if (current && strcmp(current->name, "Call") == 0) {
             log_warn("BaresipManager", "WATCHDOG: Force closing Call Applet");
-            applet_manager_back();
+            // Only back if we truly went to IDLE (remove_call might have switched)
+            if (g_call_state.state == CALL_STATE_IDLE)
+               applet_manager_back();
         }
-        
-        g_call_state.state = CALL_STATE_IDLE;
-        g_call_state.peer_uri[0] = '\0';
     }
 }
 
@@ -1769,6 +1823,15 @@ int baresip_manager_reject_call(void *call_ptr) {
   }
   
   log_info("BaresipManager", "Rejecting call object %p", (void*)c);
+  // Mark as TERMINATED immediately to allow slot recycling
+  for (int i = 0; i < MAX_CALLS; i++) {
+      if (g_call_state.active_calls[i].call == c) {
+          g_call_state.active_calls[i].state = CALL_STATE_TERMINATED;
+          log_info("BaresipManager", "Force-set call %p in slot %d to TERMINATED (Reject)", c, i);
+          break;
+      }
+  }
+  
   // Using 486 (Busy Here) explicitly to ensure standard rejection
   call_hangup(c, 486, "Busy Here"); 
   return 0;
@@ -1779,6 +1842,15 @@ int baresip_manager_hangup(void) {
 
   struct call *call = g_call_state.current_call;
   log_info("BaresipManager", "Hangup: Hanging up call %p", call);
+
+  // Mark as TERMINATED immediately to allow slot recycling
+  for (int i = 0; i < MAX_CALLS; i++) {
+      if (g_call_state.active_calls[i].call == call) {
+          g_call_state.active_calls[i].state = CALL_STATE_TERMINATED;
+          log_info("BaresipManager", "Force-set call %p in slot %d to TERMINATED (Hangup)", call, i);
+          break;
+      }
+  }
   
   // Use 486 Busy Here for explicit rejection
   call_hangup(call, 486, "Busy Here"); 
@@ -2145,65 +2217,27 @@ static int internal_add_account(const voip_account_t *acc) {
 int baresip_manager_get_active_calls(call_info_t *calls, int max_count) {
   int count = 0;
   
-  // DIRECT CORE QUERY: Iterate all User Agents AND their calls
-  struct le *le_ua;
-  for (le_ua = ((struct list *)uag_list())->head; le_ua && count < max_count; le_ua = le_ua->next) {
-      struct ua *ua = le_ua->data;
-      
-      // Iterate nested calls list for this UA
-      struct list *calls_list = ua_calls(ua);
-      struct le *le_call;
-      for (le_call = list_head(calls_list); le_call && count < max_count; le_call = le_call->next) {
-          struct call *c = le_call->data;
-          
-          if (c) {
-              // Found a real call object!
-              calls[count].id = (void *)c;
-              safe_strncpy(calls[count].peer_uri, call_peeruri(c), sizeof(calls[count].peer_uri));
-              calls[count].state = call_state(c);
-              calls[count].is_held = call_is_onhold(c);
-              calls[count].is_current = (c == g_call_state.current_call);
-              
-              // SYNC: Ensure global state matches current call state (Polling Source of Truth)
-              if (calls[count].is_current) {
-                  if (g_call_state.state != calls[count].state) {
-                      log_info("BaresipManager", "Syncing global state %d -> %d", g_call_state.state, calls[count].state);
-                      g_call_state.state = calls[count].state;
-                  }
-              }
-              
-              // Auto-recover current call pointer if it was lost
-              if (!g_call_state.current_call && calls[count].state == CALL_STATE_INCOMING) {
-                  g_call_state.current_call = c;
-                  g_call_state.state = calls[count].state;
-                  calls[count].is_current = true;
-              }
-              
-              count++;
-          }
-      }
+  // No fallback logic needed: active_calls array is the source of truth.
+
+  // Iterate our managed active_calls array
+  for (int i=0; i<MAX_CALLS && count < max_count; i++) {
+        if (g_call_state.active_calls[i].call != NULL) {
+            calls[count].id = (void *)g_call_state.active_calls[i].call;
+            safe_strncpy(calls[count].peer_uri, g_call_state.active_calls[i].peer_uri, sizeof(calls[count].peer_uri));
+            
+            calls[count].state = g_call_state.active_calls[i].state;
+            
+            // Check hold status only if not terminated (to avoid touching potentially freeing objects)
+            if (calls[count].state != CALL_STATE_TERMINATED) {
+                 calls[count].is_held = call_is_onhold(g_call_state.active_calls[i].call);
+            } else {
+                 calls[count].is_held = false;
+            }
+
+            calls[count].is_current = (g_call_state.active_calls[i].call == g_call_state.current_call);
+            count++;
+        }
   }
-
-  // Fallback: Ghost Call Synthesis (Only if we still found nothing but state says so)
-  if (count == 0 && (g_call_state.state == CALL_STATE_INCOMING ||
-                     g_call_state.state == CALL_STATE_RINGING ||
-                     g_call_state.state == CALL_STATE_EARLY ||
-                     g_call_state.state == CALL_STATE_ESTABLISHED)) {
-      
-      const char *peer = g_call_state.peer_uri;
-      if (!peer || strlen(peer) == 0) peer = "unknown";
-
-      log_warn("BaresipManager", "Synthesizing Ghost Call for UI (State %d, Peer %s)", 
-               g_call_state.state, peer);
-
-      calls[0].id = (void *)0xDEADBEEF; // Sentinel ID
-      safe_strncpy(calls[0].peer_uri, peer, sizeof(calls[0].peer_uri));
-      calls[0].state = g_call_state.state;
-      calls[0].is_held = false;
-      calls[0].is_current = true;
-      count = 1;
-  }
-
   return count;
 }
 

@@ -1100,8 +1100,9 @@ void update_call_duration(lv_timer_t *timer) {
 
   // Poll active calls to detect silent
   // termination
-  call_info_t calls[4];
-  int raw_count = baresip_manager_get_active_calls(calls, 4);
+  call_info_t calls[MAX_CALLS];
+  int raw_count = baresip_manager_get_active_calls(calls, MAX_CALLS);
+
   int valid_count = 0;
   for (int i = 0; i < raw_count; i++) {
     if (calls[i].state != CALL_STATE_TERMINATED &&
@@ -1174,31 +1175,8 @@ void show_dtmf_clicked(lv_event_t *e) {
 static void call_list_item_clicked(lv_event_t *e) {
   void *call_id = lv_event_get_user_data(e);
   if (call_id) {
+    // Only switch backend state. The listener `on_call_state_change` will handle UI updates.
     baresip_manager_switch_to(call_id);
-    // Fetch data to update list
-    applet_t *applet = applet_manager_get_applet("Call");
-    if (applet && applet->user_data) {
-         call_data_t *data = (call_data_t*)applet->user_data;
-         
-         // Fix: Fetch fresh state from backend! 
-         // 'baresip_manager_switch_to' updates global state, but 'data->current_state' 
-         // might be stale until next poll/event.
-         data->current_state = baresip_manager_get_state();
-         const char *peer = baresip_manager_get_peer();
-         if (peer) {
-             strncpy(data->current_peer_uri, peer, sizeof(data->current_peer_uri)-1);
-             data->current_peer_uri[sizeof(data->current_peer_uri)-1] = '\0';
-         }
-
-         update_call_list(data, NULL);
-
-         // Force Main View Refresh
-         if (data->current_state == CALL_STATE_INCOMING) {
-             show_incoming_call_screen(data, peer);
-         } else {
-             show_active_call_screen(data, peer);
-         }
-    }
   }
 }
 
@@ -1245,16 +1223,16 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
   if (!data || !data->active_call_screen)
     return;
 
-  call_info_t calls[8];
-  int raw_count = baresip_manager_get_active_calls(calls, 8);
-  log_info("CallApplet", "Update Call List: RawCount=%d", raw_count);
+  // FIX: Use MAX_CALLS instead of hardcoded 8 
+  call_info_t calls[MAX_CALLS];
+  int active_count = baresip_manager_get_active_calls(calls, MAX_CALLS);
+  log_info("CallApplet", "Update Call List: ActiveCount=%d", active_count);
 
   // Filter out ignored call and calls not matching the current View Mode
   int count = 0;
-  call_info_t valid_calls[8];
+  call_info_t valid_calls[MAX_CALLS];
 
-
-  for (int i = 0; i < raw_count; i++) {
+  for (int i = 0; i < active_count; i++) {
     if (ignore_id && calls[i].id == ignore_id)
       continue;
 
@@ -1724,8 +1702,8 @@ void check_ui_updates(lv_timer_t *t) {
        // Check if truly no calls (to handle multi-call scenarios)
        // Check if truly no calls (to handle multi-call scenarios)
        // Fix: Ignore TERMINATED calls that might still linger in core
-       call_info_t calls[4];
-       int count = baresip_manager_get_active_calls(calls, 4);
+       call_info_t calls[MAX_CALLS];
+       int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
        bool has_active = false;
        for (int i=0; i<count; i++) {
            if (calls[i].state != CALL_STATE_TERMINATED && 
@@ -1875,12 +1853,26 @@ void on_call_state_change(enum call_state state, const char *peer_uri, void *cal
   g_call_data->ui_update_needed = true;
 
   // Force applet switch if Incoming or Established
-  if (state == CALL_STATE_INCOMING) {
-    call_applet_request_incoming_view();
-    lv_async_call(launch_call_applet_async, NULL);
-  } else if (state == CALL_STATE_ESTABLISHED) {
-    call_applet_request_active_view();
-    lv_async_call(launch_call_applet_async, NULL);
+  // Force applet switch if Incoming or Established
+  // ONLY if not already in Call applet
+  applet_t *curr = applet_manager_get_current();
+  bool already_active = (curr && strcmp(curr->name, "Call") == 0);
+
+  if (!already_active) {
+      if (state == CALL_STATE_INCOMING) {
+        call_applet_request_incoming_view();
+        lv_async_call(launch_call_applet_async, NULL);
+      } else if (state == CALL_STATE_ESTABLISHED) {
+        call_applet_request_active_view();
+        lv_async_call(launch_call_applet_async, NULL);
+      }
+  } else {
+       // Just ensure view mode is correct without re-launching
+       if (state == CALL_STATE_INCOMING) {
+           call_applet_request_incoming_view();
+       } else if (state == CALL_STATE_ESTABLISHED) {
+           call_applet_request_active_view();
+       }
   }
 }
 
@@ -2114,10 +2106,9 @@ int call_init(applet_t *applet) {
   // User asked for white. Let's make it transparent so it inherits white.
   lv_obj_set_style_bg_opa(data->call_list_cont, LV_OPA_TRANSP, 0);
   // Add a border separator
+  // No border, No scrollbar
   lv_obj_set_style_border_width(data->call_list_cont, 0, 0);
-  lv_obj_set_style_border_side(data->call_list_cont, LV_BORDER_SIDE_RIGHT, 0);
-  lv_obj_set_style_border_width(data->call_list_cont, 1, 0);
-  lv_obj_set_style_border_color(data->call_list_cont, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_set_scrollbar_mode(data->call_list_cont, LV_SCROLLBAR_MODE_OFF);
   
   lv_obj_set_flex_flow(data->call_list_cont, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(data->call_list_cont, 5, 0);
@@ -2177,8 +2168,9 @@ int call_init(applet_t *applet) {
                           0); // Transparent
   lv_obj_set_style_border_width(ui_layer, 0, 0);
   lv_obj_set_style_pad_all(ui_layer, 0, 0); // Remove default padding
+  lv_obj_set_style_pad_bottom(ui_layer, 50, 0); // 50px margin to bottom
   lv_obj_set_flex_flow(ui_layer, LV_FLEX_FLOW_COLUMN);
-  lv_obj_align(ui_layer, LV_ALIGN_CENTER, 0, 50); // Moved down by 50px
+  lv_obj_center(ui_layer); // Center in parent
 
   // Top Info (Call Status/Name)
   lv_obj_t *top_info = lv_obj_create(ui_layer);
@@ -2223,6 +2215,12 @@ int call_init(applet_t *applet) {
                              0);
 
   // Video container and children removed from here (pushed to background layer)
+
+  // Spacer to push buttons to bottom
+  lv_obj_t *spacer = lv_obj_create(ui_layer);
+  lv_obj_set_flex_grow(spacer, 1);
+  lv_obj_set_style_bg_opa(spacer, 0, 0);
+  lv_obj_set_style_border_width(spacer, 0, 0);
 
   // Action Grid
   lv_obj_t *action_grid = lv_obj_create(ui_layer);
@@ -2613,8 +2611,8 @@ static void call_start(applet_t *applet) {
     // Re-use logic for view mode processing (simplified duplication for now)
     // To ensure consistency, we should ideally call a helper, but for quick
     // fix: Process View Mode
-    call_info_t calls[8];
-    int count = baresip_manager_get_active_calls(calls, 8);
+    call_info_t calls[MAX_CALLS];
+    int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
     int target_idx = -1;
 
     // Priority 1: Find Current Call matching the requested View Mode
@@ -2692,6 +2690,10 @@ static void call_pause(applet_t *applet) {
     lv_timer_pause(data->status_timer);
   if (data->video_timer)
     lv_timer_pause(data->video_timer);
+  if (data->ui_poller)
+    lv_timer_pause(data->ui_poller);
+  if (data->exit_timer)
+    lv_timer_pause(data->exit_timer);
 }
 
 static void call_resume(applet_t *applet) {
@@ -2702,6 +2704,10 @@ static void call_resume(applet_t *applet) {
     lv_timer_resume(data->status_timer);
   if (data->video_timer)
     lv_timer_resume(data->video_timer);
+  if (data->ui_poller)
+    lv_timer_resume(data->ui_poller);
+  if (data->exit_timer)
+    lv_timer_resume(data->exit_timer);
 
   // Sync state from Baresip Manager
   data->current_state = baresip_manager_get_state();
@@ -2733,8 +2739,8 @@ static void call_resume(applet_t *applet) {
     log_info("CallApplet", "Resume: Processing View Mode %d", g_req_view_mode);
 
     // Find appropriate call
-    call_info_t calls[8];
-    int count = baresip_manager_get_active_calls(calls, 8);
+    call_info_t calls[MAX_CALLS];
+    int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
     int target_idx = -1;
 
     // 1. Prefer Current Call if it matches criteria

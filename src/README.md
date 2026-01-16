@@ -5,9 +5,11 @@ An embedded SIP Softphone application for ARM platforms using [Baresip](https://
 ## Features
 - **SIP Telephony**: Make and receive VoIP calls using Baresip.
 - **Advanced Call Handling**:
-    - **Multi-Call Support**: Seamlessly switch between multiple active calls.
+    - **Multi-Call Support**: Seamlessly switch between multiple active calls (Up to 8 concurrent).
+    - **Zombie Call Buffer**: Internal architecture allows 32 background call slots to prevent blocking during network teardown.
+    - **Instant Slot Recycling**: Forcibly recycles call slots on hangup to ensure immediate UI responsiveness.
     - **Gestures**: Swipe Up to minimize call screen; intuitive list navigation.
-    - **Robust State Management**: Automatic recovery from network drops and "ghost" calls.
+    - **Robust State Management**: Automatic recovery from network drops, "ghost" calls, and restart loops.
 - **Touch UI**: Responsive interface built with LVGL (Light and Versatile Graphics Library).
 - **Visuals**: Clean, modern aesthetics with transparent overlays and smooth transitions.
 - **Video Calls**: Support for raw video stream display (via SDL or FBDEV).

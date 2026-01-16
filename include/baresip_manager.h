@@ -9,6 +9,8 @@
 #include <baresip.h>
 #include "config_manager.h"
 
+#define MAX_CALLS 8
+
 typedef enum {
   REG_STATUS_NONE = 0,
   REG_STATUS_REGISTERING,
