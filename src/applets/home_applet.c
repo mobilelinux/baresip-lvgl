@@ -40,6 +40,12 @@ typedef struct {
   
   // Dynamic Layout
   lv_obj_t *info_cont; 
+
+  // Cached Data
+  int default_account_index;
+  char current_account_user[128];
+  char current_account_server[128];
+  char current_account_display[128];
 } home_data_t;
 
 // Forward decl
@@ -52,36 +58,49 @@ extern void call_applet_request_active_view(void);
 
 extern void settings_applet_open_accounts(void);
 
-static void update_account_display(home_data_t *data) {
-    if (!data || !data->account_btn) return;
+// Helper to refresh cached account data (Disk IO)
+static void refresh_account_data(home_data_t *data) {
+    if (!data) return;
 
-    // 1. Get Default Account Index
     app_config_t config;
     if (config_load_app_settings(&config) != 0) {
         config.default_account_index = -1;
     }
+    data->default_account_index = config.default_account_index;
 
-    if (config.default_account_index < 0) {
+    if (config.default_account_index >= 0) {
+        voip_account_t accounts[MAX_ACCOUNTS];
+        int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+        if (config.default_account_index < count) {
+            voip_account_t *acc = &accounts[config.default_account_index];
+            strncpy(data->current_account_user, acc->username, sizeof(data->current_account_user)-1);
+            strncpy(data->current_account_server, acc->server, sizeof(data->current_account_server)-1);
+            strncpy(data->current_account_display, acc->display_name, sizeof(data->current_account_display)-1);
+        } else {
+             data->default_account_index = -1; // Invalid
+        }
+    }
+}
+
+static void update_account_display(home_data_t *data) {
+    if (!data || !data->account_btn) return;
+
+    // Use cached data
+    if (data->default_account_index < 0) {
         // No Account
         lv_label_set_text(data->account_label, "Add Account");
         lv_label_set_text(data->account_icon, LV_SYMBOL_PLUS); // Or User Plus
         lv_obj_set_style_text_color(data->account_icon, lv_palette_main(LV_PALETTE_GREY), 0);
     } else {
-        // Load Account
-        voip_account_t accounts[MAX_ACCOUNTS];
-        int count = config_load_accounts(accounts, MAX_ACCOUNTS);
-        if (config.default_account_index < count) {
-            voip_account_t *acc = &accounts[config.default_account_index];
-            
             // Display Name (or Username)
-            if (strlen(acc->display_name) > 0)
-                lv_label_set_text(data->account_label, acc->display_name);
+            if (strlen(data->current_account_display) > 0)
+                lv_label_set_text(data->account_label, data->current_account_display);
             else
-                lv_label_set_text(data->account_label, acc->username);
+                lv_label_set_text(data->account_label, data->current_account_user);
 
-            // Status
+            // Status - Check live status from Manager (Cheap Memory Lookup)
             char aor[256];
-            snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+            snprintf(aor, sizeof(aor), "sip:%s@%s", data->current_account_user, data->current_account_server);
             reg_status_t status = baresip_manager_get_account_status(aor);
 
             if (status == REG_STATUS_REGISTERED) {
@@ -94,13 +113,6 @@ static void update_account_display(home_data_t *data) {
                  lv_label_set_text(data->account_icon, LV_SYMBOL_WARNING);
                  lv_obj_set_style_text_color(data->account_icon, lv_palette_main(LV_PALETTE_RED), 0);
             }
-
-        } else {
-             // Index out of bounds fallback
-             lv_label_set_text(data->account_label, "Setup Account");
-             lv_label_set_text(data->account_icon, LV_SYMBOL_SETTINGS);
-             lv_obj_set_style_text_color(data->account_icon, lv_palette_main(LV_PALETTE_GREY), 0);
-        }
     }
 }
 
@@ -121,8 +133,9 @@ static void home_applet_update_notifications(home_data_t *data) {
   // 2. Update Home Notifications
   // FIX: Scan ALL calls. Baresip Manager state only reflects the *current* focused call.
   // We want to show "Incoming" if ANY call is incoming, and "In Call" if ANY is active.
-  call_info_t calls[8];
-  int count = baresip_manager_get_active_calls(calls, 8);
+  call_info_t calls[MAX_CALLS];
+  int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
+
   
   bool any_incoming = false;
   bool any_active = false;
@@ -692,19 +705,18 @@ static int home_init(applet_t *applet) {
 
   // Populate Favorites
   populate_favorites(data);
-  
-  // Register Call Listener for Instant Updates
-  baresip_manager_add_listener(home_on_call_state);
-
-  return 0;
-
-  return 0;
+  return 0; // Fix duplicate return
 }
 
 static void home_start(applet_t *applet) {
   (void)applet;
   log_info("HomeApplet", "Started");
   home_data_t *data = (home_data_t *)applet->user_data;
+  
+  if (data) {
+      refresh_account_data(data); // Initial load
+  }
+
   // Refocus tileview on start
   if (data && data->tileview) {
     lv_group_t *g = lv_group_get_default();
@@ -718,7 +730,14 @@ static void home_resume(applet_t *applet) {
   log_debug("HomeApplet", "Resumed");
   home_data_t *data = (home_data_t *)applet->user_data;
   if (data) {
+    refresh_account_data(data); // Reload in case Settings changed it
     populate_favorites(data);
+
+    // Restart Timer if missing
+    if (!data->clock_timer) {
+         data->clock_timer = lv_timer_create(update_clock, 1000, data);
+         update_clock(data->clock_timer); // Instant update
+    }
 
     // Restore focus to tileview
     if (data->tileview) {
@@ -735,6 +754,11 @@ static void home_resume(applet_t *applet) {
 static void home_pause(applet_t *applet) {
   (void)applet;
   log_debug("HomeApplet", "Paused");
+  home_data_t *data = (home_data_t *)applet->user_data;
+  if (data && data->clock_timer) {
+      lv_timer_del(data->clock_timer);
+      data->clock_timer = NULL;
+  }
 }
 
 static void home_stop(applet_t *applet) {

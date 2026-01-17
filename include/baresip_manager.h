@@ -41,6 +41,7 @@ int baresip_manager_answer_call(bool video);
 int baresip_manager_reject_call(void *call_ptr);
 int baresip_manager_hangup(void);
 int baresip_manager_send_dtmf(char key);
+int baresip_manager_transfer(const char *target);
 enum call_state baresip_manager_get_state(void);
 const char *baresip_manager_get_peer(void);
 void baresip_manager_mute(bool mute);

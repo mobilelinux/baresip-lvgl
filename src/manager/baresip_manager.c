@@ -1666,6 +1666,24 @@ static void check_call_watchdog(void *arg) {
 // Helper to detect all active local IPs (IPv4) - Redundant if net_debug used?
 // Retaining per original code.
 
+// Helper to auto-hold all other active calls
+static void internal_hold_active_calls(struct call *exclude) {
+    for (int i = 0; i < MAX_CALLS; i++) {
+        struct call *c = g_call_state.active_calls[i].call;
+        // Only hold ESTABLISHED calls. 
+        // We might also want to hold EARLY/RINGING? No, usually you can't hold those easily or it implies separate behavior.
+        // Stick to ESTABLISHED for now.
+        if (c && c != exclude && g_call_state.active_calls[i].state == CALL_STATE_ESTABLISHED) {
+            if (!call_is_onhold(c)) {
+                 log_info("BaresipManager", "Auto-holding call %p (Slot %d)", c, i);
+                 // We don't need to update our state immediately, bevent will fire? 
+                 // Or we should trust call_hold returns 0.
+                 call_hold(c, true);
+            }
+        }
+    }
+}
+
 int baresip_manager_connect(const char *uri, const char *account_aor, bool video) {
   char full_uri[256];
   struct ua *ua = NULL;
@@ -1722,9 +1740,8 @@ int baresip_manager_connect(const char *uri, const char *account_aor, bool video
   full_uri[sizeof(full_uri) - 1] = '\0';
 
   // Make call
-  if (g_call_state.current_call && !call_is_onhold(g_call_state.current_call)) {
-    call_hold(g_call_state.current_call, true);
-  }
+  // Auto-hold other calls
+  internal_hold_active_calls(NULL);
 
   struct call *call = NULL;
   err = ua_connect(ua, &call, NULL, full_uri, video ? VIDMODE_ON : VIDMODE_OFF);
@@ -1784,6 +1801,9 @@ int baresip_manager_answer_call(bool video) {
       log_warn("BaresipManager", "Answer: No call found to answer.");
       return -1;
   }
+  
+  // Auto-hold other calls before answering
+  internal_hold_active_calls(c);
   
   call_answer(c, 200, video ? VIDMODE_ON : VIDMODE_OFF);
   return 0;
@@ -2247,6 +2267,18 @@ int baresip_manager_send_dtmf(char key) {
   return call_send_digit(g_call_state.current_call, key);
 }
 
+
+
+int baresip_manager_transfer(const char *target) {
+    if (!g_call_state.current_call) {
+        log_warn("BaresipManager", "Transfer: No active call");
+        return -1;
+    }
+    log_info("BaresipManager", "Transferring active call to %s", target);
+    return call_transfer(g_call_state.current_call, target);
+}
+
+// Ensure correct thread safe call (usually called from main thread)
 int baresip_manager_hold_call(void *call_id) {
   struct call *call = (struct call *)call_id;
   if (!call) call = g_call_state.current_call;

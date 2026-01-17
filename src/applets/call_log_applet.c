@@ -624,7 +624,9 @@ static void show_detail_screen(const char *number, const char *name) {
     lv_obj_set_size(btn_call, 60, 60);
     lv_obj_set_style_radius(btn_call, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(btn_call, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0); // Red/Orange per image
-    lv_label_set_text(lv_label_create(btn_call), LV_SYMBOL_CALL);
+    lv_obj_t *lbl_call = lv_label_create(btn_call);
+    lv_label_set_text(lbl_call, LV_SYMBOL_CALL);
+    lv_obj_center(lbl_call);
     char *num_copy = lv_mem_alloc(128);
     strcpy(num_copy, number);
     lv_obj_add_event_cb(btn_call, detail_call_clicked, LV_EVENT_CLICKED, num_copy);
@@ -634,7 +636,9 @@ static void show_detail_screen(const char *number, const char *name) {
     lv_obj_set_size(btn_msg, 60, 60);
     lv_obj_set_style_radius(btn_msg, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(btn_msg, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
-    lv_label_set_text(lv_label_create(btn_msg), LV_SYMBOL_EDIT); // Message icon fallback
+    lv_obj_t *lbl_msg = lv_label_create(btn_msg);
+    lv_label_set_text(lbl_msg, LV_SYMBOL_EDIT); // Message icon fallback
+    lv_obj_center(lbl_msg);
     
     char *num_copy_msg = lv_mem_alloc(128);
     strcpy(num_copy_msg, number);
